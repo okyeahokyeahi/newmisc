@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using DesktopBuddy.Ai;
+using DesktopBuddy.Magi;
 using DesktopBuddy.Monitors;
 using DesktopBuddy.Native;
 using DesktopBuddy.UI;
@@ -24,6 +25,8 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly RestartMonitor _restart;
     private readonly ReminderStore _reminders = new();
     private readonly LaptopCareMonitor _care = new();
+    private readonly SoundBank _sounds;
+    private bool MagiTheme => _settings.Theme.Equals("magi", StringComparison.OrdinalIgnoreCase);
     private Hotkey? _hotkey;
     private Hotkey? _screenHotkey;
     private QuickPanel? _quickPanel;
@@ -72,6 +75,7 @@ internal sealed class BuddyContext : ApplicationContext
         _idleHogs = new IdleHogWatcher(settings, _resources);
         _gpuChoice = new GpuChoiceWatcher(settings, _resources);
         _restart = new RestartMonitor(_games);
+        _sounds = new SoundBank(settings, () => _games.InSession);
 
         _services = new BuddyServices
         {
@@ -114,7 +118,11 @@ internal sealed class BuddyContext : ApplicationContext
             onClick: tip.Url == null ? () => OpenUri("ms-settings:startupapps") : () => OpenAsUser(tip.Url)));
         _restart.Remind += days => OnUi(() => Notify("Windows wants to restart",
             $"An update has been waiting {days} days. Restarting finishes it (and often fixes driver hiccups). Click to restart when you're ready.",
-            ToolTipIcon.Info, onClick: ConfirmRestart));
+            ToolTipIcon.Info, onClick: () =>
+            {
+                if (MagiTheme) ShowMagi(MagiCases.Restart(days, StartRestart));
+                else ConfirmRestart();
+            }));
         _idleHogs.Report += findings => OnUi(() => OnIdleHogs(findings));
         _gpuChoice.WrongChip += finding => OnUi(() => OnWrongGpu(finding));
         _gpuChoice.AutoFixed += name => OnUi(() => Notify("Graphics setting kept",
@@ -158,6 +166,7 @@ internal sealed class BuddyContext : ApplicationContext
         };
         menu.Items.Add(startWithWindows);
         menu.Items.Add(BuildTidyMenu());
+        menu.Items.Add(BuildThemeMenu());
         menu.Items.Add("AI setup (API key, model)…", null, (_, _) => _services.ShowApiKey());
         menu.Items.Add($"Check for updates (you have {Updater.CurrentVersion.ToString(3)})", null, async (_, _) => await CheckForUpdates(manual: true));
         // Shown at the top of the menu once an update is found, so installing never depends on catching a notification.
@@ -412,12 +421,100 @@ internal sealed class BuddyContext : ApplicationContext
             });
     }
 
+    // ---------- MAGI theme ----------
+    private MagiForm CreateMagiForm(MagiCase vote)
+    {
+        Task<IReadOnlyDictionary<Core, string>?>? voices =
+            _settings.MagiAiVoices && _services.Ai.HasKey ? MagiVoices.Ask(_services.Ai, vote) : null;
+        return new MagiForm(vote, _sounds, voices);
+    }
+
+    private void ShowMagi(MagiCase vote)
+    {
+        MagiForm form = CreateMagiForm(vote);
+        form.FormClosed += (_, _) => form.Dispose();
+        form.Show();
+        form.Activate();
+    }
+
+    private ToolStripMenuItem BuildThemeMenu()
+    {
+        var root = new ToolStripMenuItem("Look && sounds");
+        var classic = new ToolStripMenuItem("Classic theme") { Checked = !MagiTheme };
+        var magi = new ToolStripMenuItem("MAGI theme (Evangelion-style votes)") { Checked = MagiTheme };
+        void SetTheme(string theme)
+        {
+            _settings.Theme = theme;
+            _settings.Save();
+            classic.Checked = !MagiTheme;
+            magi.Checked = MagiTheme;
+        }
+        classic.Click += (_, _) => SetTheme("classic");
+        magi.Click += (_, _) =>
+        {
+            SetTheme("magi");
+            ShowMagi(MagiCases.Test(() => { }));
+        };
+        var sounds = new ToolStripMenuItem("MAGI sounds") { CheckOnClick = true, Checked = _settings.MagiSounds };
+        sounds.Click += (_, _) => { _settings.MagiSounds = sounds.Checked; _settings.Save(); };
+        var voices = new ToolStripMenuItem("AI voices for the cores (uses your API key)") { CheckOnClick = true, Checked = _settings.MagiAiVoices };
+        voices.Click += (_, _) => { _settings.MagiAiVoices = voices.Checked; _settings.Save(); };
+
+        root.DropDownItems.Add(classic);
+        root.DropDownItems.Add(magi);
+        root.DropDownItems.Add(new ToolStripSeparator());
+        root.DropDownItems.Add(sounds);
+        root.DropDownItems.Add(voices);
+        root.DropDownItems.Add("Run a MAGI test vote", null, (_, _) => ShowMagi(MagiCases.Test(() => { })));
+        root.DropDownItems.Add("Open sounds folder (add your own)", null, (_, _) => OpenFile("explorer.exe", SoundBank.Folder));
+        return root;
+    }
+
+    private static bool HasWindow(string exePath)
+    {
+        foreach (Process p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exePath)))
+        {
+            using (p)
+            {
+                try
+                {
+                    if (p.MainWindowHandle != IntPtr.Zero &&
+                        string.Equals(NativeMethods.GetProcessPath(p.Id), exePath, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                catch (InvalidOperationException)
+                {
+                    // exited
+                }
+            }
+        }
+        return false;
+    }
+
+    private void RecycleFile(string path)
+    {
+        try
+        {
+            Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path,
+                Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            Notify("Moved to Recycle Bin", $"{Path.GetFileName(path)} is in the Recycle Bin.", ToolTipIcon.Info, critical: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Recycling {path} failed", ex);
+            Notify("Couldn't move it", "Delete it by hand from your Downloads folder.", ToolTipIcon.Error, critical: true);
+        }
+    }
+
     private void ConfirmRestart()
     {
         var answer = MessageBox.Show("Restart now to finish the Windows update?\n\nSave anything you're working on first " +
                                      "(Roblox Studio!). The PC restarts in 30 seconds.",
             "Desktop Buddy", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-        if (answer != DialogResult.Yes) return;
+        if (answer == DialogResult.Yes) StartRestart();
+    }
+
+    private static void StartRestart()
+    {
         try
         {
             Process.Start(new ProcessStartInfo("shutdown.exe", "/r /t 30 /c \"Desktop Buddy: restarting to finish Windows updates.\"")
@@ -558,6 +655,18 @@ internal sealed class BuddyContext : ApplicationContext
             ? $"From {report.FromHost}{(report.ViaHost != null && report.ViaHost != report.FromHost ? $" (via {report.ViaHost})" : "")}. "
             : "";
         string warnings = report.Warnings.Count > 0 ? "⚠ " + string.Join(" ", report.Warnings) + " " : "";
+        if (MagiTheme && report.Warnings.Count > 0)
+        {
+            MagiCase vote = MagiCases.Download(report,
+                scan: () => _ = ScanDownload(report.FilePath),
+                showFile: () => OpenFile("explorer.exe", "/select,\"" + report.FilePath + "\""),
+                recycle: () => RecycleFile(report.FilePath));
+            if (_games.InSession || NativeMethods.UserIsBusy())
+                Notify("CASPER·3 · SECURITY ALERT", $"{report.FileName}: vote requested. Click to open the MAGI panel.",
+                    ToolTipIcon.Warning, critical: true, onClick: () => ShowMagi(vote));
+            else ShowMagi(vote);
+            return;
+        }
         Notify($"Downloaded: {report.FileName}", $"Click to scan it with Defender. {from}{warnings}".Trim(),
             report.Warnings.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
             critical: report.Warnings.Count > 0,
@@ -612,17 +721,39 @@ internal sealed class BuddyContext : ApplicationContext
             _suspiciousDialogOpen = true;
             try
             {
-                SuspiciousChoice choice;
-                using (var dialog = new SuspiciousProcessDialog(item, explain: p =>
-                       {
-                           using var explainForm = new ExplainForm(_services, Path.GetFileNameWithoutExtension(p.Name), p.ExePath, p.Reasons);
-                           explainForm.ShowDialog();
-                       }))
+                if (MagiTheme)
                 {
-                    dialog.ShowDialog();
-                    choice = dialog.Choice;
+                    SuspiciousChoice? magiChoice = null;
+                    string appName = Path.GetFileNameWithoutExtension(item.Name);
+                    AppUsage? usage = _resources.Latest?.AllApps.FirstOrDefault(a => a.Name.Equals(appName, StringComparison.OrdinalIgnoreCase));
+                    MagiCase vote = MagiCases.Suspicious(item, usage, HasWindow(item.ExePath),
+                        terminate: () => magiChoice = SuspiciousChoice.Kill,
+                        explain: () =>
+                        {
+                            using var explainForm = new ExplainForm(_services, appName, item.ExePath, item.Reasons);
+                            explainForm.ShowDialog();
+                            _pendingSuspicious.Enqueue(item); // ask again after reading
+                            _scanner.ForgetReport(item.ExePath);
+                        },
+                        allow: () => magiChoice = SuspiciousChoice.AlwaysAllow,
+                        ignore: () => magiChoice = SuspiciousChoice.Ignore);
+                    using (var form = CreateMagiForm(vote)) form.ShowDialog();
+                    if (magiChoice is SuspiciousChoice chosen) HandleChoice(item, chosen);
                 }
-                HandleChoice(item, choice); // may show a MessageBox, so keep the guard up until it's done
+                else
+                {
+                    SuspiciousChoice choice;
+                    using (var dialog = new SuspiciousProcessDialog(item, explain: p =>
+                           {
+                               using var explainForm = new ExplainForm(_services, Path.GetFileNameWithoutExtension(p.Name), p.ExePath, p.Reasons);
+                               explainForm.ShowDialog();
+                           }))
+                    {
+                        dialog.ShowDialog();
+                        choice = dialog.Choice;
+                    }
+                    HandleChoice(item, choice); // may show a MessageBox, so keep the guard up until it's done
+                }
             }
             finally
             {
@@ -896,6 +1027,7 @@ internal sealed class BuddyContext : ApplicationContext
         _updateTimer.Stop();
         _slowUiTimer.Stop();
         _hotkey?.Dispose();
+        _sounds.Dispose();
         _screenHotkey?.Dispose();
         if (KeepAwake.Until != null) KeepAwake.Set(null);
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;

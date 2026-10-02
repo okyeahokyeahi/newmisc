@@ -17,6 +17,7 @@
   <ItemGroup>
     <PackageReference Include="Anthropic" Version="12.53.0" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 
 </Project>

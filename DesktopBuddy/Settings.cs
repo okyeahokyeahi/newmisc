@@ -90,6 +90,14 @@ public sealed class Settings
     public List<string> ForceRtxApps { get; set; } = [];
     public bool WatchGraphicsChip { get; set; } = true;
 
+    // --- Look ---
+    /// <summary>"classic" or "magi" (the Evangelion-style MAGI vote screen for big decisions).</summary>
+    public string Theme { get; set; } = "classic";
+    public bool MagiSounds { get; set; } = true;
+    /// <summary>0..1.5; your own files are levelled first, then scaled by this.</summary>
+    public double MagiVolume { get; set; } = 0.8;
+    public bool MagiAiVoices { get; set; } = true;
+
     // --- AI (only used once you add an API key) ---
     /// <summary>Claude Haiku 4.5 is the cheapest and plenty for this app; pick another in the AI setup window.</summary>
     public string AiModel { get; set; } = "claude-haiku-4-5";
