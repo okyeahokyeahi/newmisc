@@ -20,6 +20,8 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly GameSessionTracker _games;
     private readonly IdleHogWatcher _idleHogs;
     private readonly GpuChoiceWatcher _gpuChoice;
+    private readonly RefreshRateMonitor _refreshRate = new();
+    private readonly System.Windows.Forms.Timer _slowUiTimer = new() { Interval = 10 * 60_000 };
     private readonly DownloadsWatcher? _downloads;
     private readonly BuddyServices _services;
     private readonly SynchronizationContext _ui;
@@ -155,6 +157,12 @@ internal sealed class BuddyContext : ApplicationContext
 
         _uiTimer.Tick += (_, _) => UiTick();
         _uiTimer.Start();
+
+        // Display checks run on the UI thread: every 10 minutes and whenever the screen setup changes.
+        _slowUiTimer.Tick += (_, _) => SlowUiTick();
+        _slowUiTimer.Start();
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        _ = Task.Delay(TimeSpan.FromSeconds(20)).ContinueWith(_ => _ui.Post(_ => SlowUiTick(), null));
 
         if (settings.CheckForUpdates)
         {
@@ -302,6 +310,37 @@ internal sealed class BuddyContext : ApplicationContext
     {
         _pausedUntil = Paused ? DateTime.MinValue : DateTime.Now.AddHours(1);
         UiTick();
+    }
+
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
+        _ui.Post(_ => _ = Task.Delay(5000).ContinueWith(_ => _ui.Post(_ => SlowUiTick(), null)), null);
+
+    private void SlowUiTick()
+    {
+        try
+        {
+            foreach (RefreshRateFinding f in _refreshRate.Check()) OnSlowRefreshRate(f);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Refresh rate check failed", ex);
+        }
+    }
+
+    private void OnSlowRefreshRate(RefreshRateFinding f)
+    {
+        Notify($"Screen is at {f.CurrentHz} Hz, not {f.BestHz} Hz",
+            $"Your {f.Name} can run at {f.BestHz} Hz but is set to {f.CurrentHz} Hz, so games feel less smooth. Click to switch it.",
+            onClick: () =>
+            {
+                var answer = MessageBox.Show($"Switch {f.Name} to {f.BestHz} Hz?\n\nThe screen may flicker for a second.",
+                    "Desktop Buddy", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (answer != DialogResult.Yes) return;
+                bool ok = RefreshRateMonitor.Apply(f);
+                Notify(ok ? "Done" : "Couldn't switch it",
+                    ok ? $"{f.Name} is now at {f.BestHz} Hz." : "Set it by hand: Settings > System > Display > Advanced display > Choose a refresh rate.",
+                    ok ? ToolTipIcon.Info : ToolTipIcon.Error, critical: true);
+            });
     }
 
     // ---------- Feature handlers ----------
@@ -643,6 +682,8 @@ internal sealed class BuddyContext : ApplicationContext
         _stop.Cancel();
         _uiTimer.Stop();
         _updateTimer.Stop();
+        _slowUiTimer.Stop();
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _tray.Visible = false;
         bool loopStopped;
         try { loopStopped = _loop.Wait(TimeSpan.FromSeconds(10)); } catch { loopStopped = true; }
