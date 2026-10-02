@@ -28,6 +28,8 @@ public sealed class Settings
     // --- Temperatures ---
     public double CpuTempWarnC { get; set; } = 90;
     public double GpuTempWarnC { get; set; } = 85;
+    /// <summary>Temps must stay over the limit this long before an alert (ignores short spikes).</summary>
+    public int TempSustainedSeconds { get; set; } = 60;
 
     // --- Suspicious process scanning ---
     public bool ScanForSuspiciousProcesses { get; set; } = true;

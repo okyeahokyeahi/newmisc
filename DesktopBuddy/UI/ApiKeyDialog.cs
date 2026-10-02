@@ -15,8 +15,9 @@ internal sealed class ApiKeyDialog : Form
         MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9.5f);
+        AutoScaleDimensions = new SizeF(96F, 96F); // designed at 100%; WinForms scales up for 125%+
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(460, 190);
+        ClientSize = new Size(480, 220);
         Padding = new Padding(16);
 
         var info = new Label
@@ -24,7 +25,7 @@ internal sealed class ApiKeyDialog : Form
             Text = "Paste an AI API key (for example an Anthropic key starting with \"sk-ant-\"). " +
                    "It's stored in Windows Credential Manager, not in a file. AI features arrive in v2.",
             Dock = DockStyle.Top,
-            Height = 56,
+            Height = 72,
         };
         _keyBox = new TextBox { Dock = DockStyle.Top, UseSystemPasswordChar = true, PlaceholderText = "sk-ant-..." };
         _status = new Label { Dock = DockStyle.Top, Height = 34, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 8, 0, 0) };

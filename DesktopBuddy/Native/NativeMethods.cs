@@ -34,6 +34,29 @@ internal static class NativeMethods
         }
     }
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern uint GetLongPathName(string shortPath, StringBuilder longPath, uint bufferLength);
+
+    /// <summary>Expands 8.3 short names (C:\Users\SAMWIL~1) so path comparisons work.</summary>
+    public static string ToLongPath(string path)
+    {
+        var buffer = new StringBuilder(1024);
+        uint length = GetLongPathName(path, buffer, (uint)buffer.Capacity);
+        return length > 0 && length < buffer.Capacity ? buffer.ToString() : path;
+    }
+
+    // ---------- "Is the user busy?" (full-screen game, presentation, Focus Assist) ----------
+    [DllImport("shell32.dll")]
+    private static extern int SHQueryUserNotificationState(out int state);
+
+    /// <summary>True while a full-screen game/video/presentation is in front, so popups should wait.</summary>
+    public static bool UserIsBusy()
+    {
+        if (SHQueryUserNotificationState(out int state) != 0) return false;
+        // 2 = busy (full-screen app), 3 = Direct3D full-screen, 4 = presentation mode
+        return state is 2 or 3 or 4;
+    }
+
     // ---------- Memory ----------
     [StructLayout(LayoutKind.Sequential)]
     public sealed class MEMORYSTATUSEX

@@ -64,7 +64,7 @@ internal sealed class BuddyContext : ApplicationContext
 
         Log.Info("Desktop Buddy started");
         _loop = Task.Run(() => MonitorLoop(_stop.Token));
-        Notify("Desktop Buddy is running", "I'm in the system tray. Double-click me for live stats.", force: true);
+        Notify("Desktop Buddy is running", "I'm in the system tray. Double-click me for live stats.", force: true, ToolTipIcon.Info);
     }
 
     private bool Paused => DateTime.Now < _pausedUntil;
@@ -123,8 +123,8 @@ internal sealed class BuddyContext : ApplicationContext
             (t?.CpuC ?? 0) - _settings.CpuTempWarnC,
             (t?.GpuC ?? 0) - _settings.GpuTempWarnC);
         SetMood(Paused ? BuddyMood.Paused
-            : hottestOverLimit >= 0 ? BuddyMood.Hot
-            : hottestOverLimit >= -10 ? BuddyMood.Warm
+            : _temps.SustainedHot ? BuddyMood.Hot
+            : hottestOverLimit >= -10 ? BuddyMood.Warm // includes short spikes over the limit
             : BuddyMood.Calm);
 
         _pauseItem.Text = Paused ? $"Resume alerts (paused until {_pausedUntil:HH:mm})" : "Pause alerts for 1 hour";
@@ -140,11 +140,11 @@ internal sealed class BuddyContext : ApplicationContext
         old?.Dispose();
     }
 
-    private void Notify(string title, string text, bool force = false)
+    private void Notify(string title, string text, bool force = false, ToolTipIcon icon = ToolTipIcon.Warning)
     {
         Log.Info($"Alert: {title}: {text}");
         if (Paused && !force) return;
-        _tray.ShowBalloonTip(8000, title, text, ToolTipIcon.Warning);
+        _tray.ShowBalloonTip(8000, title, text, icon);
     }
 
     private void TogglePause()
@@ -159,25 +159,40 @@ internal sealed class BuddyContext : ApplicationContext
         ShowNextSuspicious();
     }
 
-    /// <summary>One dialog at a time; held back while alerts are paused (e.g. during a game).</summary>
+    /// <summary>
+    /// One dialog at a time. Held back while alerts are paused or a full-screen game/video is in
+    /// front, so it never yanks you out of a game.
+    /// </summary>
     private void ShowNextSuspicious()
     {
-        if (_suspiciousDialogOpen || Paused) return;
+        if (_suspiciousDialogOpen || Paused || NativeMethods.UserIsBusy()) return;
 
         while (_pendingSuspicious.Count > 0)
         {
             SuspiciousProcess item = _pendingSuspicious.Dequeue();
-            if (!StillRunning(item)) continue;
+            List<Process> running = RunningCopies(item.ExePath);
+            running.ForEach(p => p.Dispose());
+            if (running.Count == 0)
+            {
+                _scanner.ForgetReport(item.ExePath); // closed on its own; report again if it comes back
+                continue;
+            }
 
             _suspiciousDialogOpen = true;
-            SuspiciousChoice choice;
-            using (var dialog = new SuspiciousProcessDialog(item))
+            try
             {
-                dialog.ShowDialog();
-                choice = dialog.Choice;
+                SuspiciousChoice choice;
+                using (var dialog = new SuspiciousProcessDialog(item))
+                {
+                    dialog.ShowDialog();
+                    choice = dialog.Choice;
+                }
+                HandleChoice(item, choice); // may show a MessageBox, so keep the guard up until it's done
             }
-            _suspiciousDialogOpen = false;
-            HandleChoice(item, choice);
+            finally
+            {
+                _suspiciousDialogOpen = false;
+            }
             return; // next one on the following tick
         }
     }
@@ -188,19 +203,29 @@ internal sealed class BuddyContext : ApplicationContext
         switch (choice)
         {
             case SuspiciousChoice.Kill:
-                if (!StillRunning(item)) return; // already gone, and the PID may now belong to something else
-                try
+                var failures = new List<string>();
+                List<Process> copies = RunningCopies(item.ExePath); // every copy, not just the first PID
+                foreach (Process process in copies)
                 {
-                    using Process process = Process.GetProcessById(item.Pid);
-                    process.Kill();
-                    Notify("Closed", $"{item.Name} was closed.", force: true);
+                    using (process)
+                    {
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error($"Killing {item.Name} (pid {process.Id}) failed", ex);
+                            failures.Add(ex.Message);
+                        }
+                    }
                 }
-                catch (Exception ex)
-                {
-                    Log.Error($"Killing {item.Name} failed", ex);
-                    MessageBox.Show($"Couldn't close {item.Name}: {ex.Message}", "Desktop Buddy",
+                _scanner.ForgetReport(item.ExePath); // if it comes back, tell me again
+                if (failures.Count == 0)
+                    Notify("Closed", $"{item.Name} was closed.", force: true, ToolTipIcon.Info);
+                else
+                    MessageBox.Show($"Couldn't close {item.Name}: {failures[0]}", "Desktop Buddy",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
                 break;
 
             case SuspiciousChoice.AlwaysAllow:
@@ -214,8 +239,20 @@ internal sealed class BuddyContext : ApplicationContext
         }
     }
 
-    private static bool StillRunning(SuspiciousProcess item) =>
-        string.Equals(NativeMethods.GetProcessPath(item.Pid), item.ExePath, StringComparison.OrdinalIgnoreCase);
+    /// <summary>All running processes started from this exe. Caller disposes them.</summary>
+    private static List<Process> RunningCopies(string exePath)
+    {
+        string name = Path.GetFileNameWithoutExtension(exePath);
+        var copies = new List<Process>();
+        foreach (Process process in Process.GetProcessesByName(name))
+        {
+            if (string.Equals(NativeMethods.GetProcessPath(process.Id), exePath, StringComparison.OrdinalIgnoreCase))
+                copies.Add(process);
+            else
+                process.Dispose();
+        }
+        return copies;
+    }
 
     private void ShowStatus()
     {
@@ -247,8 +284,9 @@ internal sealed class BuddyContext : ApplicationContext
         _stop.Cancel();
         _uiTimer.Stop();
         _tray.Visible = false;
-        try { _loop.Wait(TimeSpan.FromSeconds(3)); } catch { /* shutting down anyway */ }
-        _temps.Dispose();
+        bool loopStopped;
+        try { loopStopped = _loop.Wait(TimeSpan.FromSeconds(10)); } catch { loopStopped = true; }
+        if (loopStopped) _temps.Dispose(); // never close the sensor driver while a read is still running
         _tray.Dispose();
         _statusForm?.Close();
         base.ExitThreadCore();

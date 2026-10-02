@@ -20,8 +20,9 @@ internal sealed class SuspiciousProcessDialog : Form
         TopMost = true;
         ShowInTaskbar = true;
         Font = new Font("Segoe UI", 9.5f);
+        AutoScaleDimensions = new SizeF(96F, 96F); // designed at 100%; WinForms scales up for 125%+
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(520, 300);
+        ClientSize = new Size(540, 320);
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 5 };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -36,9 +37,11 @@ internal sealed class SuspiciousProcessDialog : Form
             AutoSize = true,
             Font = new Font("Segoe UI", 12f, FontStyle.Bold),
         });
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.Controls.Add(new TextBox
         {
             Text = item.ExePath,
+            TabStop = false,
             ReadOnly = true,
             BorderStyle = BorderStyle.None,
             BackColor = SystemColors.Control,
@@ -49,12 +52,15 @@ internal sealed class SuspiciousProcessDialog : Form
         layout.Controls.Add(new Label
         {
             Text = string.Join("\n", item.Reasons.Select(r => "• " + r)) +
-                   "\n\nNot sure? Click \"Show file\" and search the name online before killing it.",
+                   "\n\nNot sure? Click \"Show file\" and search the name online before killing it. " +
+                   "\"Ignore\" hides it until Desktop Buddy restarts.",
             Dock = DockStyle.Fill,
         });
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
-        buttons.Controls.Add(MakeButton("Ignore", SuspiciousChoice.Ignore));
+        Button ignore = MakeButton("Ignore", SuspiciousChoice.Ignore);
+        CancelButton = ignore; // Esc = Ignore
+        buttons.Controls.Add(ignore);
         buttons.Controls.Add(MakeButton("Always allow", SuspiciousChoice.AlwaysAllow));
         buttons.Controls.Add(MakeButton("Kill it", SuspiciousChoice.Kill));
         var show = new Button { Text = "Show file", AutoSize = true };

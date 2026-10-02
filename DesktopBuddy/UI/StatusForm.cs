@@ -26,6 +26,7 @@ internal sealed class StatusForm : Form
         Text = "Desktop Buddy";
         Icon = BuddyIcon.Create(BuddyMood.Calm);
         Font = new Font("Segoe UI", 9.5f);
+        AutoScaleDimensions = new SizeF(96F, 96F); // designed at 100%; WinForms scales up for 125%+
         AutoScaleMode = AutoScaleMode.Dpi;
         StartPosition = FormStartPosition.Manual;
         ClientSize = new Size(560, 470);
@@ -60,7 +61,7 @@ internal sealed class StatusForm : Form
         _apps.Columns.Add("Memory", 90, HorizontalAlignment.Right);
         _apps.Columns.Add("Processes", 80, HorizontalAlignment.Right);
 
-        _footer = new Label { Dock = DockStyle.Bottom, Height = 70, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 6, 0, 0) };
+        _footer = new Label { Dock = DockStyle.Bottom, Height = 90, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 6, 0, 0) };
 
         Controls.Add(_apps);
         Controls.Add(heading);

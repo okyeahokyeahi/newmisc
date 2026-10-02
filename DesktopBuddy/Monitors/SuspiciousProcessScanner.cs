@@ -29,6 +29,7 @@ public sealed class SuspiciousProcessScanner(Settings settings)
     private readonly Dictionary<string, bool> _signatureCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _allowed = new(settings.AllowedExePaths, StringComparer.OrdinalIgnoreCase);
     private readonly object _allowedGate = new();
+    private readonly HashSet<string> _alreadyReported = new(StringComparer.OrdinalIgnoreCase); // exe paths
     private Dictionary<string, string>? _startupBaseline;
 
     public int FlaggedCount { get; private set; }
@@ -42,6 +43,12 @@ public sealed class SuspiciousProcessScanner(Settings settings)
     public void Allow(string exePath)
     {
         lock (_allowedGate) _allowed.Add(exePath);
+    }
+
+    /// <summary>Called from the UI thread after you dealt with a program, so it can be reported again later.</summary>
+    public void ForgetReport(string exePath)
+    {
+        lock (_allowedGate) _alreadyReported.Remove(exePath);
     }
 
     public void Tick()
@@ -69,11 +76,12 @@ public sealed class SuspiciousProcessScanner(Settings settings)
                 _seen[pid] = path;
 
                 lock (_allowedGate)
-                    if (_allowed.Contains(path)) continue;
+                    if (_allowed.Contains(path) || _alreadyReported.Contains(path)) continue;
 
                 List<string> reasons = Evaluate(path);
                 if (reasons.Count == 0) continue;
 
+                lock (_allowedGate) _alreadyReported.Add(path); // one popup per program, not per copy
                 FlaggedCount++;
                 Log.Info($"Flagged {path} (pid {pid}): {string.Join("; ", reasons)}");
                 Flagged?.Invoke(new SuspiciousProcess(pid, Path.GetFileName(path), path, reasons));
@@ -150,8 +158,8 @@ public sealed class SuspiciousProcessScanner(Settings settings)
             string entryName = key[(key.LastIndexOf('|') + 1)..];
             Log.Info($"New startup entry {key} -> {command}");
             Alert?.Invoke("New startup program",
-                $"\"{entryName}\" just set itself to start with Windows: {command}\n" +
-                "If you didn't just install something, check Task Manager > Startup apps.");
+                $"\"{entryName}\" just set itself to start with Windows. Didn't install anything? " +
+                "Check Task Manager > Startup apps (full command is in the log).");
         }
         _startupBaseline = current;
     }
@@ -162,9 +170,7 @@ public sealed class SuspiciousProcessScanner(Settings settings)
         (RegistryKey Root, string Path)[] locations =
         [
             (Registry.CurrentUser, @"Software\Microsoft\Windows\CurrentVersion\Run"),
-            (Registry.CurrentUser, @"Software\Microsoft\Windows\CurrentVersion\RunOnce"),
             (Registry.LocalMachine, @"Software\Microsoft\Windows\CurrentVersion\Run"),
-            (Registry.LocalMachine, @"Software\Microsoft\Windows\CurrentVersion\RunOnce"),
             (Registry.LocalMachine, @"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"),
         ];
 
@@ -191,7 +197,7 @@ public sealed class SuspiciousProcessScanner(Settings settings)
         string Dir(string p) => p.TrimEnd('\\') + "\\";
         return
         [
-            (Dir(Path.GetTempPath()), "your Temp folder"),
+            (Dir(NativeMethods.ToLongPath(Path.GetTempPath())), "your Temp folder"),
             (Dir(Path.Combine(WindowsDir, "Temp")), "the Windows Temp folder"),
             (Dir(Path.Combine(profile, "Downloads")), "your Downloads folder"),
             (Dir(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public"), "the Public user folder"),
