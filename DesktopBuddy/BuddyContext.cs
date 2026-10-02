@@ -19,6 +19,7 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly DiskMonitor _disk;
     private readonly GameSessionTracker _games;
     private readonly IdleHogWatcher _idleHogs;
+    private readonly GpuChoiceWatcher _gpuChoice;
     private readonly DownloadsWatcher? _downloads;
     private readonly BuddyServices _services;
     private readonly SynchronizationContext _ui;
@@ -40,6 +41,9 @@ internal sealed class BuddyContext : ApplicationContext
     private DateTime _balloonShownAt;
     private readonly List<DateTime> _recentDownloadToasts = [];
     private readonly HashSet<string> _scansRunning = new(StringComparer.OrdinalIgnoreCase);
+    // Clickable alerts that arrived mid-game come back one by one after it (the report only lists text).
+    private readonly Queue<(string Title, string Text, ToolTipIcon Icon, Action OnClick)> _afterGame = new();
+    private DateTime _lastAfterGameToast;
 
     public BuddyContext(Settings settings)
     {
@@ -54,6 +58,7 @@ internal sealed class BuddyContext : ApplicationContext
         _disk = new DiskMonitor(settings);
         _games = new GameSessionTracker(settings, _resources, _temps, _heat);
         _idleHogs = new IdleHogWatcher(settings, _resources);
+        _gpuChoice = new GpuChoiceWatcher(settings, _resources);
 
         _services = new BuddyServices
         {
@@ -86,6 +91,9 @@ internal sealed class BuddyContext : ApplicationContext
         _hiddenStartup.Alert += alert => OnUi(() => Notify(alert.Title, alert.Message, critical: true, onClick: () => OpenStartupPlace(alert.Place)));
         _games.SessionEnded += report => OnUi(() => OnGameEnded(report));
         _idleHogs.Report += findings => OnUi(() => OnIdleHogs(findings));
+        _gpuChoice.WrongChip += finding => OnUi(() => OnWrongGpu(finding));
+        _gpuChoice.AutoFixed += name => OnUi(() => Notify("Graphics setting kept",
+            $"{Diagnosis.FriendlyName(name)} updated, so I set it to use the RTX again. Restart it once to apply.", ToolTipIcon.Info));
 
         if (settings.WatchDownloads)
         {
@@ -176,6 +184,7 @@ internal sealed class BuddyContext : ApplicationContext
             Safe("heat slowdown monitor", _heat.Tick);
             Safe("game tracker", _games.Tick);
             Safe("idle hog watcher", () => _idleHogs.Tick(_games.InSession));
+            if (_settings.WatchGraphicsChip) Safe("graphics chip watcher", _gpuChoice.Tick);
 
             if (_settings.ScanForSuspiciousProcesses && now >= nextScan)
             {
@@ -242,6 +251,14 @@ internal sealed class BuddyContext : ApplicationContext
 
         _pauseItem.Text = Paused ? $"Resume alerts (paused until {_pausedUntil:HH:mm})" : "Pause alerts for 1 hour";
         ShowNextSuspicious();
+
+        // After a game: replay clickable alerts, spaced out so each can be read and clicked.
+        if (_afterGame.Count > 0 && !_games.InSession && !Paused && DateTime.UtcNow - _lastAfterGameToast > TimeSpan.FromSeconds(20))
+        {
+            _lastAfterGameToast = DateTime.UtcNow;
+            var (title, text, icon, onClick) = _afterGame.Dequeue();
+            Notify(title, text, icon, critical: true, onClick: onClick);
+        }
     }
 
     private void SetMood(BuddyMood mood)
@@ -263,7 +280,11 @@ internal sealed class BuddyContext : ApplicationContext
         if (!critical)
         {
             if (Paused) return;
-            if (_games.Hold($"{title}: {text}")) return;
+            if (_games.Hold($"{title}: {text}"))
+            {
+                if (onClick != null && _afterGame.Count < 5) _afterGame.Enqueue((title, text, icon, onClick));
+                return;
+            }
         }
         _balloonClick = onClick;
         _balloonShownAt = DateTime.UtcNow;
@@ -301,6 +322,27 @@ internal sealed class BuddyContext : ApplicationContext
             critical: true,
             onClick: () => _services.ShowExplain(top.Name, top.ExePath,
                 [$"Used {top.What} for {(int)top.Duration.TotalMinutes}+ minutes while the computer was idle."]));
+    }
+
+    private void OnWrongGpu(WrongGpuFinding f)
+    {
+        string app = Diagnosis.FriendlyName(f.AppName);
+        Notify($"{app} is using the weak graphics chip",
+            $"It's running on the built-in {f.UsingChip} instead of your {f.BetterChip}, so FPS will be much lower. " +
+            "Click to switch it to the RTX (takes effect next time you open it).",
+            onClick: () =>
+            {
+                try
+                {
+                    _gpuChoice.UseStrongChip(f.AppName, f.ExePath);
+                    Notify("Done", $"{app} will use the {f.BetterChip} from now on. Close and reopen it to apply.", ToolTipIcon.Info, critical: true);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Setting graphics preference failed", ex);
+                    Notify("Couldn't change it", "Set it by hand: Settings > System > Display > Graphics > pick the app > High performance.", ToolTipIcon.Error, critical: true);
+                }
+            });
     }
 
     private void OnDownload(DownloadReport report)
@@ -567,6 +609,7 @@ internal sealed class BuddyContext : ApplicationContext
         {
             _temps.Dispose(); // never close the sensor driver while a read is still running
             _idleHogs.Dispose();
+            _gpuChoice.Dispose();
             Nvml.Close();
         }
         _downloads?.Dispose();

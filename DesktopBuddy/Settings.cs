@@ -70,6 +70,10 @@ public sealed class Settings
     /// <summary>Check GitHub for a newer version at startup and every few hours.</summary>
     public bool CheckForUpdates { get; set; } = true;
 
+    /// <summary>Apps you told to always use the RTX; kept fixed when they update into a new folder.</summary>
+    public List<string> ForceRtxApps { get; set; } = [];
+    public bool WatchGraphicsChip { get; set; } = true;
+
     // --- AI (only used once you add an API key) ---
     /// <summary>Claude Haiku 4.5 is the cheapest and plenty for this app; pick another in the AI setup window.</summary>
     public string AiModel { get; set; } = "claude-haiku-4-5";

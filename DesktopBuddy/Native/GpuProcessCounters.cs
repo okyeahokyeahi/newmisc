@@ -40,10 +40,19 @@ internal sealed class GpuProcessCounters : IDisposable
         }
     }
 
-    /// <summary>PID -> GPU % (3D/compute engines only). Empty on the first call (needs two samples).</summary>
+    /// <summary>PID -> GPU % (busiest 3D/compute engine). Empty on the first call (needs two samples).</summary>
     public Dictionary<int, double> Sample()
     {
         var result = new Dictionary<int, double>();
+        foreach (var (pid, _, value) in SampleByAdapter())
+            result[pid] = Math.Max(result.GetValueOrDefault(pid), value);
+        return result;
+    }
+
+    /// <summary>(PID, graphics chip LUID, GPU %) for every busy 3D/compute engine.</summary>
+    public List<(int Pid, long Luid, double Percent)> SampleByAdapter()
+    {
+        var result = new List<(int, long, double)>();
         if (_query == IntPtr.Zero || PdhCollectQueryData(_query) != 0) return result;
         if (!_primed)
         {
@@ -78,7 +87,7 @@ internal sealed class GpuProcessCounters : IDisposable
                 int end = name.IndexOf('_', 4);
                 if (end < 0 || !int.TryParse(name.AsSpan(4, end - 4), out int pid)) continue;
 
-                result[pid] = Math.Max(result.GetValueOrDefault(pid), Math.Min(100, value));
+                result.Add((pid, ParseLuid(name), Math.Min(100, value)));
             }
         }
         finally
@@ -86,6 +95,25 @@ internal sealed class GpuProcessCounters : IDisposable
             Marshal.FreeHGlobal(buffer);
         }
         return result;
+    }
+
+    /// <summary>"..._luid_0x00000000_0x0000D1A3_..." -> 0x00000000_0000D1A3 (high, low).</summary>
+    private static long ParseLuid(string name)
+    {
+        int i = name.IndexOf("_luid_0x", StringComparison.Ordinal);
+        if (i < 0) return 0;
+        string[] parts = name[(i + 6)..].Split('_');
+        if (parts.Length < 2) return 0;
+        try
+        {
+            long high = Convert.ToInt64(parts[0], 16);
+            long low = Convert.ToInt64(parts[1], 16);
+            return (high << 32) | (low & 0xFFFFFFFF);
+        }
+        catch (FormatException)
+        {
+            return 0;
+        }
     }
 
     public void Dispose()
