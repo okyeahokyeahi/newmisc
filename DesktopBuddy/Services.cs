@@ -22,4 +22,5 @@ internal sealed class BuddyServices
     /// <summary>(process name, exe path or null, flag reasons or null)</summary>
     public required Action<string, string?, IReadOnlyList<string>?> ShowExplain { get; init; }
     public required Action ShowApiKey { get; init; }
+    public required Action ShowGameReady { get; init; }
 }

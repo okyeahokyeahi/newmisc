@@ -43,6 +43,10 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
     public GameSessionReport? LastReport { get; private set; }
 
     public event Action<GameSessionReport>? SessionEnded;
+    public event Action<string>? SessionStarted;
+
+    /// <summary>Raised when a game stops, even short ones that don't produce a report.</summary>
+    public event Action? GameStopped;
 
     public void Tick()
     {
@@ -62,6 +66,7 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
                 _cpuSlowAtStart = heat.Latest?.CpuToday ?? TimeSpan.Zero;
                 _gpuSlowAtStart = heat.Latest?.GpuToday ?? TimeSpan.Zero;
                 Log.Info($"Game session started: {game}");
+                SessionStarted?.Invoke(game);
             }
         }
 
@@ -105,6 +110,7 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
             Clamp((heatNow?.GpuToday ?? TimeSpan.Zero) - _gpuSlowAtStart),
             held);
         Log.Info($"Game session ended: {_game}, {length:h\\:mm\\:ss}");
+        GameStopped?.Invoke();
 
         if (length < TimeSpan.FromMinutes(2) && held.Count == 0) return; // a quick launcher/menu blip
         LastReport = report;

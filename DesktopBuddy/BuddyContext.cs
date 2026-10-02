@@ -75,6 +75,7 @@ internal sealed class BuddyContext : ApplicationContext
             ShowAsk = ShowAsk,
             ShowExplain = (name, path, reasons) => new ExplainForm(_services!, name, path, reasons).Show(),
             ShowApiKey = () => { using var d = new ApiKeyDialog(settings); d.ShowDialog(); },
+            ShowGameReady = () => new GameReadyForm(_services!).Show(),
         };
 
         // Monitors run on a background thread; every alert hops to the UI thread here.
@@ -90,6 +91,8 @@ internal sealed class BuddyContext : ApplicationContext
             Notify(title, text, critical: critical, onClick: () => OpenUri("windowsdefender://threatsettings")));
         _hiddenStartup.Alert += alert => OnUi(() => Notify(alert.Title, alert.Message, critical: true, onClick: () => OpenStartupPlace(alert.Place)));
         _games.SessionEnded += report => OnUi(() => OnGameEnded(report));
+        _games.SessionStarted += _ => OnUi(OnGameStarted);
+        _games.GameStopped += () => OnUi(OnGameStopped);
         _idleHogs.Report += findings => OnUi(() => OnIdleHogs(findings));
         _gpuChoice.WrongChip += finding => OnUi(() => OnWrongGpu(finding));
         _gpuChoice.AutoFixed += name => OnUi(() => Notify("Graphics setting kept",
@@ -113,6 +116,7 @@ internal sealed class BuddyContext : ApplicationContext
         menu.Items.Add(new ToolStripMenuItem("Open Desktop Buddy", null, (_, _) => ShowStatus()) { Font = new Font(menu.Font, FontStyle.Bold) });
         menu.Items.Add("Why is it slow / loud?", null, (_, _) => ShowDiagnosis());
         menu.Items.Add("Ask Buddy…", null, (_, _) => ShowAsk(null));
+        menu.Items.Add("Get game-ready…", null, (_, _) => _services.ShowGameReady());
         menu.Items.Add(_pauseItem);
         menu.Items.Add(new ToolStripSeparator());
         var startWithWindows = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = settings.StartWithWindows };
@@ -301,6 +305,43 @@ internal sealed class BuddyContext : ApplicationContext
     }
 
     // ---------- Feature handlers ----------
+    private Guid? _powerModeBeforeGame;
+
+    private void OnGameStarted()
+    {
+        if (!_settings.BestPerformanceDuringGames || _powerModeBeforeGame != null) return;
+        Guid? current = PowerMode.Current();
+        if (current == null || current == PowerMode.BestPerformance) return;
+        if (PowerMode.Set(PowerMode.BestPerformance))
+        {
+            _powerModeBeforeGame = current;
+            Log.Info("Power mode: Best performance for the game");
+        }
+    }
+
+    private void OnGameStopped()
+    {
+        if (_powerModeBeforeGame is Guid previous)
+        {
+            PowerMode.Set(previous);
+            _powerModeBeforeGame = null;
+            Log.Info("Power mode restored");
+        }
+
+        if (_settings.ReopenBrowserAfterGame && _settings.BrowserToReopen is string browser && File.Exists(browser) &&
+            Process.GetProcessesByName(Path.GetFileNameWithoutExtension(browser)).Length == 0)
+        {
+            try
+            {
+                PowerMode.StartAsUser(browser); // via Explorer, so it doesn't run as admin
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Reopening the browser failed", ex);
+            }
+        }
+    }
+
     private void OnGameEnded(GameSessionReport report)
     {
         bool throttled = report.CpuHeatSlowdown > TimeSpan.FromSeconds(10) || report.GpuHeatSlowdown > TimeSpan.FromSeconds(10);
@@ -605,6 +646,7 @@ internal sealed class BuddyContext : ApplicationContext
         _tray.Visible = false;
         bool loopStopped;
         try { loopStopped = _loop.Wait(TimeSpan.FromSeconds(10)); } catch { loopStopped = true; }
+        if (_powerModeBeforeGame is Guid previous) PowerMode.Set(previous);
         if (loopStopped)
         {
             _temps.Dispose(); // never close the sensor driver while a read is still running

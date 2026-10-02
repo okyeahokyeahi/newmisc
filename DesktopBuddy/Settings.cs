@@ -70,6 +70,13 @@ public sealed class Settings
     /// <summary>Check GitHub for a newer version at startup and every few hours.</summary>
     public bool CheckForUpdates { get; set; } = true;
 
+    /// <summary>Apps "Get game-ready" ticks by default (your last choice is remembered).</summary>
+    public List<string> GameReadyCloseList { get; set; } = ["chrome", "msedge", "firefox", "opera", "spotify", "ms-teams"];
+    public bool ReopenBrowserAfterGame { get; set; }
+    public string? BrowserToReopen { get; set; }
+    /// <summary>Switch Windows' power mode to Best performance during games, and back afterwards.</summary>
+    public bool BestPerformanceDuringGames { get; set; } = true;
+
     /// <summary>Apps you told to always use the RTX; kept fixed when they update into a new folder.</summary>
     public List<string> ForceRtxApps { get; set; } = [];
     public bool WatchGraphicsChip { get; set; } = true;

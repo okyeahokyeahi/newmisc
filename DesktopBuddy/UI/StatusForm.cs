@@ -48,6 +48,7 @@ internal sealed class StatusForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 2, 0, 2) };
         actions.Controls.Add(Ui.Button("Why is it slow / loud?", (_, _) => _s.ShowDiagnosis()));
         actions.Controls.Add(Ui.Button("Ask Buddy", (_, _) => _s.ShowAsk(null)));
+        actions.Controls.Add(Ui.Button("Get game-ready", (_, _) => _s.ShowGameReady()));
 
         var heading = new Label
         {
