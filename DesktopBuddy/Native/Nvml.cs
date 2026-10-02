@@ -29,8 +29,14 @@ internal static class Nvml
     [DllImport("nvml.dll", EntryPoint = "nvmlDeviceGetHandleByIndex_v2")]
     private static extern int GetHandleByIndex(uint index, out IntPtr device);
 
+    // Renamed in newer drivers; try the new name first and fall back to the old one.
+    [DllImport("nvml.dll", EntryPoint = "nvmlDeviceGetCurrentClocksEventReasons")]
+    private static extern int GetEventReasons(IntPtr device, out ulong reasons);
+
     [DllImport("nvml.dll", EntryPoint = "nvmlDeviceGetCurrentClocksThrottleReasons")]
     private static extern int GetThrottleReasons(IntPtr device, out ulong reasons);
+
+    private static bool _useOldName;
 
     [DllImport("nvml.dll", EntryPoint = "nvmlDeviceGetUtilizationRates")]
     private static extern int GetUtilization(IntPtr device, out NvmlUtilization utilization);
@@ -68,13 +74,25 @@ internal static class Nvml
         if (!Available) return null;
         try
         {
-            if (GetThrottleReasons(_device, out ulong reasons) != 0) return null;
+            ulong reasons;
+            int status;
+            try
+            {
+                status = _useOldName ? GetThrottleReasons(_device, out reasons) : GetEventReasons(_device, out reasons);
+            }
+            catch (EntryPointNotFoundException) when (!_useOldName)
+            {
+                _useOldName = true;
+                status = GetThrottleReasons(_device, out reasons);
+            }
+            if (status != 0) return null;
             uint busy = GetUtilization(_device, out var u) == 0 ? u.Gpu : 0;
             return (reasons, busy);
         }
         catch (Exception ex)
         {
-            Log.Error("NVML read failed", ex);
+            Log.Error("NVML read failed; GPU slowdown reasons turned off", ex);
+            _ready = false; // don't retry (and log) every few seconds
             return null;
         }
     }

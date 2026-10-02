@@ -37,6 +37,9 @@ internal sealed class BuddyContext : ApplicationContext
     private DateTime _pausedUntil = DateTime.MinValue;
     private BuddyMood? _currentMood;
     private Action? _balloonClick;
+    private DateTime _balloonShownAt;
+    private readonly List<DateTime> _recentDownloadToasts = [];
+    private readonly HashSet<string> _scansRunning = new(StringComparer.OrdinalIgnoreCase);
 
     public BuddyContext(Settings settings)
     {
@@ -75,11 +78,12 @@ internal sealed class BuddyContext : ApplicationContext
         _temps.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: ShowDiagnosis));
         _heat.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: ShowDiagnosis));
         _disk.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: () => OpenUri("ms-settings:storagesense")));
-        _scanner.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: () => OpenUri("ms-settings:startupapps")));
+        // Security alerts are "critical": shown even mid-game or while paused, because a fake executor gets run while Roblox is open.
+        _scanner.Alert += (title, text) => OnUi(() => Notify(title, text, critical: true, onClick: () => OpenUri("ms-settings:startupapps")));
         _scanner.Flagged += item => OnUi(() => EnqueueSuspicious(item));
         _defender.Alert += (title, text, critical) => OnUi(() =>
             Notify(title, text, critical: critical, onClick: () => OpenUri("windowsdefender://threatsettings")));
-        _hiddenStartup.Alert += alert => OnUi(() => Notify(alert.Title, alert.Message, onClick: () => OpenStartupPlace(alert.Place)));
+        _hiddenStartup.Alert += alert => OnUi(() => Notify(alert.Title, alert.Message, critical: true, onClick: () => OpenStartupPlace(alert.Place)));
         _games.SessionEnded += report => OnUi(() => OnGameEnded(report));
         _idleHogs.Report += findings => OnUi(() => OnIdleHogs(findings));
 
@@ -118,7 +122,10 @@ internal sealed class BuddyContext : ApplicationContext
         };
         SetMood(BuddyMood.Calm);
         _tray.DoubleClick += (_, _) => ShowStatus();
-        _tray.BalloonTipClicked += (_, _) => (_balloonClick ?? ShowStatus)();
+        // Windows only says "a balloon was clicked", not which one. Older ones clicked later from the
+        // notification centre could run the wrong action, so after a minute a click just opens the status window.
+        _tray.BalloonTipClicked += (_, _) =>
+            (DateTime.UtcNow - _balloonShownAt < TimeSpan.FromSeconds(60) ? _balloonClick ?? ShowStatus : ShowStatus)();
 
         _uiTimer.Tick += (_, _) => UiTick();
         _uiTimer.Start();
@@ -244,6 +251,10 @@ internal sealed class BuddyContext : ApplicationContext
             if (_games.Hold($"{title}: {text}")) return;
         }
         _balloonClick = onClick;
+        _balloonShownAt = DateTime.UtcNow;
+        // Windows cuts balloon text at 255 characters and titles at 63.
+        if (text.Length > 255) text = text[..252] + "...";
+        if (title.Length > 63) title = title[..60] + "...";
         _tray.ShowBalloonTip(8000, title, text, icon);
     }
 
@@ -261,7 +272,7 @@ internal sealed class BuddyContext : ApplicationContext
                       (throttled ? " · slowed down from heat" : "") +
                       (report.HeldAlerts.Count > 0 ? $" · {report.HeldAlerts.Count} alert(s) waiting" : "") +
                       ". Click for the report.";
-        Notify($"Game over: {report.Game}", text, throttled || report.HeldAlerts.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
+        Notify($"Game over: {Diagnosis.FriendlyName(report.Game)}", text, throttled || report.HeldAlerts.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
             onClick: () => new GameReportForm(report, _settings).Show());
     }
 
@@ -269,29 +280,54 @@ internal sealed class BuddyContext : ApplicationContext
     {
         IdleHogFinding top = findings.OrderByDescending(f => f.Duration).First();
         string others = findings.Count > 1 ? $" (+{findings.Count - 1} more)" : "";
-        Notify("Something worked hard while you were away",
+        Notify("Busy while you were away",
             $"{top.Name} used {top.What} for {(int)top.Duration.TotalMinutes}+ min while you weren't using the PC{others}. " +
             "Hidden crypto-miners do this. Click to see what it is.",
+            critical: true,
             onClick: () => _services.ShowExplain(top.Name, top.ExePath,
                 [$"Used {top.What} for {(int)top.Duration.TotalMinutes}+ minutes while the computer was idle."]));
     }
 
     private void OnDownload(DownloadReport report)
     {
+        // "Extract here" can drop dozens of files at once: show the first few, log the rest.
+        DateTime now = DateTime.UtcNow;
+        _recentDownloadToasts.RemoveAll(t => now - t > TimeSpan.FromSeconds(30));
+        if (_recentDownloadToasts.Count >= 3)
+        {
+            Log.Info($"Download (not shown, too many at once): {report.FileName} {string.Join(" ", report.Warnings)}");
+            return;
+        }
+        _recentDownloadToasts.Add(now);
+
         string from = report.FromHost != null
             ? $"From {report.FromHost}{(report.ViaHost != null && report.ViaHost != report.FromHost ? $" (via {report.ViaHost})" : "")}. "
             : "";
         string warnings = report.Warnings.Count > 0 ? "⚠ " + string.Join(" ", report.Warnings) + " " : "";
-        Notify($"Downloaded: {report.FileName}", $"{from}{warnings}Click to scan it with Defender.",
+        Notify($"Downloaded: {report.FileName}", $"Click to scan it with Defender. {from}{warnings}".Trim(),
             report.Warnings.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
+            critical: report.Warnings.Count > 0,
             onClick: () => _ = ScanDownload(report.FilePath));
     }
 
     private async Task ScanDownload(string path)
     {
-        Notify("Scanning…", $"Defender is checking {Path.GetFileName(path)}.", ToolTipIcon.Info, critical: true);
-        var (clean, message) = await DownloadsWatcher.ScanWithDefender(path);
-        Notify(clean ? "Scan finished" : "Scan result", message, clean ? ToolTipIcon.Info : ToolTipIcon.Error, critical: true);
+        if (!_scansRunning.Add(path)) return; // already scanning this file
+        try
+        {
+            Notify("Scanning…", $"Defender is checking {Path.GetFileName(path)}.", ToolTipIcon.Info, critical: true);
+            var (clean, message) = await DownloadsWatcher.ScanWithDefender(path);
+            Notify(clean ? "Scan finished" : "Scan result", message, clean ? ToolTipIcon.Info : ToolTipIcon.Error, critical: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Defender scan failed", ex);
+            Notify("Scan failed", "Couldn't run the Defender scan. Right-click the file > Scan with Microsoft Defender instead.", ToolTipIcon.Error, critical: true);
+        }
+        finally
+        {
+            _scansRunning.Remove(path);
+        }
     }
 
     private void EnqueueSuspicious(SuspiciousProcess item)
@@ -459,6 +495,7 @@ internal sealed class BuddyContext : ApplicationContext
     {
         if (_askForm is { IsDisposed: false })
         {
+            _askForm.SetQuestion(question);
             _askForm.Activate();
             return;
         }

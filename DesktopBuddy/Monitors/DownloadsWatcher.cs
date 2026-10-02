@@ -55,32 +55,42 @@ public sealed class DownloadsWatcher : IDisposable
     private void Consider(string path)
     {
         if (!WatchedExtensions.Contains(Path.GetExtension(path))) return;
-        // One report per file even though Windows fires several events.
+        // One report per file even though Windows fires several events. Only a finished inspection counts,
+        // so Firefox's empty placeholder (same name, 0 bytes) doesn't block the real file.
         if (_recent.TryGetValue(path, out DateTime seen) && DateTime.UtcNow - seen < TimeSpan.FromMinutes(5)) return;
-        _recent[path] = DateTime.UtcNow;
+        if (!_inspecting.TryAdd(path, 0)) return;
         _ = Task.Run(() => InspectWhenFinished(path));
     }
+
+    private readonly ConcurrentDictionary<string, byte> _inspecting = new(StringComparer.OrdinalIgnoreCase);
 
     private async Task InspectWhenFinished(string path)
     {
         try
         {
-            // Wait until the file stops growing and nothing has it open (up to ~2 minutes).
+            // Wait until the file has content, stops growing and nothing has it open (up to ~10 minutes).
             long lastSize = -1;
-            for (int i = 0; i < 60; i++)
+            bool ready = false;
+            for (int i = 0; i < 300 && !ready; i++)
             {
                 await Task.Delay(2000);
                 if (!File.Exists(path)) return;
                 long size = new FileInfo(path).Length;
-                if (size == lastSize && CanOpen(path)) break;
+                ready = size > 0 && size == lastSize && CanOpen(path);
                 lastSize = size;
             }
+            if (!ready) return;
 
+            _recent[path] = DateTime.UtcNow;
             Downloaded?.Invoke(Inspect(path));
         }
         catch (Exception ex)
         {
             Log.Error($"Inspecting download {path} failed", ex);
+        }
+        finally
+        {
+            _inspecting.TryRemove(path, out _);
         }
     }
 
@@ -92,19 +102,19 @@ public sealed class DownloadsWatcher : IDisposable
 
         string inner = Path.GetExtension(Path.GetFileNameWithoutExtension(name));
         if (inner.Length > 0 && DecoyExtensions.Contains(inner) && (ProgramExtensions.Contains(ext) || ScriptExtensions.Contains(ext)))
-            warnings.Add($"Fake extension: it looks like a {inner} file but is really a {ext} program.");
+            warnings.Add($"Fake extension: really a {ext} program, not a {inner}.");
 
         if (ProgramExtensions.Contains(ext))
         {
             long size = new FileInfo(path).Length;
             if (size > 400L * 1024 * 1024 && ext.Equals(".exe", StringComparison.OrdinalIgnoreCase))
-                warnings.Add($"Unusually huge program ({Format.Bytes(size)}). Malware gets padded like this to dodge upload scanners.");
+                warnings.Add($"Suspiciously huge program ({Format.Bytes(size)}), a trick to dodge scanners.");
             if (!FileTrust.IsSigned(path))
-                warnings.Add("Not digitally signed, so there's no company vouching for it.");
+                warnings.Add("Not digitally signed.");
         }
         else if (ScriptExtensions.Contains(ext))
         {
-            warnings.Add($"{ext} files run commands directly when opened. Only open it if you trust where it came from.");
+            warnings.Add($"{ext} files run commands when opened.");
         }
         else
         {
@@ -120,41 +130,22 @@ public sealed class DownloadsWatcher : IDisposable
         if (!ext.Equals(".zip", StringComparison.OrdinalIgnoreCase))
         {
             if (LooksEncrypted7zOrRar(path))
-                warnings.Add("Password-protected archive: antivirus can't look inside. \"Password: 1234\" downloads are a classic cheat/executor scam.");
+                warnings.Add("Password-protected: antivirus can't see inside (classic executor scam).");
             return;
         }
 
         try
         {
             using ZipArchive zip = ZipFile.OpenRead(path);
+            if (zip.Entries.Any(e => e.IsEncrypted))
+                warnings.Add("Password-protected: antivirus can't see inside (classic executor scam).");
             var programs = zip.Entries.Where(e => ProgramExtensions.Contains(Path.GetExtension(e.Name)) || ScriptExtensions.Contains(Path.GetExtension(e.Name)))
-                .Select(e => e.Name).Take(3).ToList();
-            if (programs.Count > 0) warnings.Add($"Contains programs/scripts: {string.Join(", ", programs)}.");
+                .Select(e => e.Name).Take(2).ToList();
+            if (programs.Count > 0) warnings.Add($"Contains {string.Join(", ", programs)}.");
         }
         catch (InvalidDataException)
         {
             warnings.Add("The zip file is damaged or disguised.");
-            return;
-        }
-
-        if (ZipIsEncrypted(path))
-            warnings.Add("Password-protected zip: antivirus can't look inside. \"Password: 1234\" downloads are a classic cheat/executor scam.");
-    }
-
-    /// <summary>Checks the encryption flag on the zip's first entry header.</summary>
-    private static bool ZipIsEncrypted(string path)
-    {
-        try
-        {
-            using var stream = File.OpenRead(path);
-            Span<byte> header = stackalloc byte[8];
-            if (stream.Read(header) < 8) return false;
-            bool isLocalHeader = header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04;
-            return isLocalHeader && (header[6] & 0x1) != 0;
-        }
-        catch
-        {
-            return false;
         }
     }
 
@@ -186,7 +177,7 @@ public sealed class DownloadsWatcher : IDisposable
             {
                 string? line = zone.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith(key + "=", StringComparison.OrdinalIgnoreCase));
                 if (line == null) return null;
-                return Uri.TryCreate(line[(key.Length + 1)..], UriKind.Absolute, out Uri? uri) ? uri.Host : null;
+                return Uri.TryCreate(line[(key.Length + 1)..], UriKind.Absolute, out Uri? uri) && uri.Host.Length > 0 ? uri.Host : null;
             }
             return (Host("HostUrl"), Host("ReferrerUrl"));
         }
@@ -223,6 +214,7 @@ public sealed class DownloadsWatcher : IDisposable
         using Process? process = Process.Start(start);
         if (process == null) return (false, "Couldn't start the Defender scan.");
         await process.WaitForExitAsync();
+        if (!File.Exists(path)) return (false, $"{Path.GetFileName(path)} is gone. Defender may have already removed it as a threat.");
         return process.ExitCode switch
         {
             0 => (true, $"Defender found nothing in {Path.GetFileName(path)}. (Brand-new malware can still slip past, so only run it if you trust the source.)"),

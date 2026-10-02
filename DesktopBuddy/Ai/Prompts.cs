@@ -71,9 +71,9 @@ internal static partial class Prompts
             process_name = Clean(name),
             folder = path == null ? null : Clean(FileTrust.Anonymize(Path.GetDirectoryName(path) ?? "")),
             folder_kind = path == null ? null : FileTrust.DescribeLocation(path),
-            digitally_signed = path == null ? (bool?)null : FileTrust.IsSigned(path),
+            signed_or_part_of_windows = path == null ? (bool?)null : FileTrust.IsTrustedPublisher(path),
             signed_by = path == null ? null : FileTrust.Publisher(path) is string p ? Clean(p) : null,
-            flagged_because = reasons,
+            flagged_because = reasons?.Select(r => r.Length > 200 ? r[..200] : r).ToList(),
         };
         return "<process_facts>" + JsonSerializer.Serialize(facts) + "</process_facts>\n\n" +
                "What is this program most likely to be, and is there anything I should check? Answer in 3-5 sentences. " +

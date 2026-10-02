@@ -66,7 +66,8 @@ internal sealed class GpuProcessCounters : IDisposable
             {
                 IntPtr item = buffer + i * itemSize;
                 string? name = Marshal.PtrToStringUni(Marshal.ReadIntPtr(item));
-                if (name == null || Marshal.ReadInt32(item, IntPtr.Size) != 0) continue;
+                // CStatus 0 = valid data, 1 = valid new data
+                if (name == null || (uint)Marshal.ReadInt32(item, IntPtr.Size) > 1) continue;
                 double value = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(item, IntPtr.Size + 8));
 
                 // e.g. "pid_1234_luid_0x0_0x1_phys_0_eng_0_engtype_3D"

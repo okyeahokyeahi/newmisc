@@ -24,6 +24,7 @@ public sealed class DefenderMonitor
     private bool? _lastRealTime;
     private HashSet<string>? _knownExclusions;
     private DateOnly _lastSignatureNag;
+    private bool _readErrorLogged;
 
     public DefenderStatus? Latest { get; private set; }
 
@@ -34,7 +35,7 @@ public sealed class DefenderMonitor
     {
         DefenderStatus status = Read();
         Latest = status;
-        if (!status.Readable) return;
+        if (!status.Readable || status.Mode == "Not running") return; // nothing reliable to compare against
 
         bool defenderInCharge = status.Mode.Equals("Normal", StringComparison.OrdinalIgnoreCase);
         if (defenderInCharge)
@@ -47,7 +48,7 @@ public sealed class DefenderMonitor
             }
             _lastRealTime = status.RealTimeOn;
 
-            if (status.SignatureAgeDays > 7 && _lastSignatureNag != DateOnly.FromDateTime(DateTime.Now))
+            if (status.SignatureAgeDays is > 7 and < 3650 && _lastSignatureNag != DateOnly.FromDateTime(DateTime.Now))
             {
                 _lastSignatureNag = DateOnly.FromDateTime(DateTime.Now);
                 Alert?.Invoke("Antivirus definitions are old",
@@ -98,7 +99,7 @@ public sealed class DefenderMonitor
         SaveBaseline(_knownExclusions.ToList());
     }
 
-    private static DefenderStatus Read()
+    private DefenderStatus Read()
     {
         try
         {
@@ -145,8 +146,11 @@ public sealed class DefenderMonitor
         }
         catch (Exception ex)
         {
-            Log.Error("Reading Defender status failed", ex);
-            return new DefenderStatus(false, "Unknown", false, false, 0, null, []);
+            // Common when McAfee/Norton is in charge and Defender is switched off. Log once, not every minute.
+            if (!_readErrorLogged) Log.Error("Reading Defender status failed (another antivirus may be in charge)", ex);
+            _readErrorLogged = true;
+            string? other = OtherAntivirusName();
+            return new DefenderStatus(other != null, "Not running", false, false, 0, other, []);
         }
     }
 

@@ -82,8 +82,7 @@ internal static class Diagnosis
         }
 
         // --- Disk ---
-        if (disk.FreeBytes is long free && disk.TotalBytes is long total &&
-            (free < (long)settings.DiskFreeWarnGb * 1024 * 1024 * 1024 || free < total / 10))
+        if (disk.FreeBytes is long free && free < (long)settings.DiskFreeWarnGb * 1024 * 1024 * 1024)
         {
             findings.Add(new Finding(Severity.Warning, $"Only {Format.Bytes(free)} free on C:",
                 "Low disk space slows things down when RAM is full. Settings > System > Storage > Cleanup recommendations."));
@@ -98,6 +97,9 @@ internal static class Diagnosis
 
         return findings;
     }
+
+    /// <summary>"Roblox" for RobloxPlayerBeta etc.; the raw name when unknown.</summary>
+    public static string FriendlyName(string processName) => KnownProcesses.Find(processName)?.Name ?? processName;
 
     /// <summary>Friendly label, e.g. "chrome (Google Chrome)".</summary>
     public static string Label(string processName) =>

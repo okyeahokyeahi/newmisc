@@ -14,6 +14,16 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
+
+        // Safety net: log unexpected errors instead of showing the WinForms crash dialog.
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) => Log.Error("Unhandled UI error", e.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Error("Unhandled error", e.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            Log.Error("Unobserved background error", e.Exception);
+            e.SetObserved();
+        };
         // Monitors raise events on a background thread; this context lets us marshal them to the UI thread.
         SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
 

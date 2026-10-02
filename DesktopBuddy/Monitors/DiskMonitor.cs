@@ -18,7 +18,7 @@ public sealed class DiskMonitor(Settings settings)
         FreeBytes = drive.AvailableFreeSpace;
         TotalBytes = drive.TotalSize;
 
-        bool low = FreeBytes < (long)settings.DiskFreeWarnGb * 1024 * 1024 * 1024 || FreeBytes < TotalBytes / 10;
+        bool low = FreeBytes < (long)settings.DiskFreeWarnGb * 1024 * 1024 * 1024;
         if (!low || DateTime.UtcNow - _lastAlert < TimeSpan.FromHours(12)) return;
 
         _lastAlert = DateTime.UtcNow;

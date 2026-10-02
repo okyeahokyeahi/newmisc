@@ -11,8 +11,8 @@ public sealed record IdleHogFinding(string Name, string? ExePath, string What, T
 /// idle (no mouse/keyboard for a few minutes) this watches for programs using lots of GPU or CPU,
 /// then tells you when you come back.
 ///
-/// Noise control: signed programs in Program Files/Windows (Steam updates, Defender scans, Windows Update)
-/// and known Windows chores are ignored; script tools like PowerShell are always checked.
+/// Noise control: signed programs (Steam updates, Roblox Studio, Discord) and Windows' own components
+/// (Defender scans, Windows Update) are ignored; script tools like PowerShell are always checked.
 /// </summary>
 public sealed class IdleHogWatcher(Settings settings, ResourceMonitor resources) : IDisposable
 {
@@ -85,7 +85,7 @@ public sealed class IdleHogWatcher(Settings settings, ResourceMonitor resources)
         if (path == null) return false;
 
         if (!_trustedCache.TryGetValue(path, out bool trusted))
-            _trustedCache[path] = trusted = FileTrust.IsInProtectedFolder(path) && FileTrust.IsSigned(path);
+            _trustedCache[path] = trusted = FileTrust.IsTrustedPublisher(path); // miners are almost always unsigned
         return !trusted;
     }
 

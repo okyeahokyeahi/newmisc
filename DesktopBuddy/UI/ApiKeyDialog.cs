@@ -23,7 +23,7 @@ internal sealed class ApiKeyDialog : Form
         var info = new Label
         {
             Text = "Paste an AI API key (for example an Anthropic key starting with \"sk-ant-\"). " +
-                   "It's stored in Windows Credential Manager, not in a file. AI features arrive in v2.",
+                   "It's stored in Windows Credential Manager, not in a file. Used by Ask Buddy and \"What is this?\".",
             Dock = DockStyle.Top,
             Height = 72,
         };

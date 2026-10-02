@@ -13,6 +13,7 @@ internal sealed class AskBuddyForm : Form
     private readonly Button _send;
     private readonly Label _status;
     private readonly List<(bool FromUser, string Text)> _history = [];
+    private readonly CancellationTokenSource _closing = new();
 
     public AskBuddyForm(BuddyServices services, string? initialQuestion)
     {
@@ -40,7 +41,7 @@ internal sealed class AskBuddyForm : Form
         foreach (string q in new[] { "Why is it slow right now?", "Are my temperatures OK?", "Is my RAM enough?" })
             quick.Controls.Add(new LinkLabel { Text = q, AutoSize = true, Margin = new Padding(4, 6, 12, 2) }.With(l => l.LinkClicked += async (_, _) => await Send(q)));
 
-        _status = new Label { Dock = DockStyle.Bottom, Height = 24, ForeColor = Ui.Grey, Padding = new Padding(12, 4, 12, 0) };
+        _status = new Label { Dock = DockStyle.Bottom, Height = 40, ForeColor = Ui.Grey, Padding = new Padding(12, 4, 12, 0) };
         var whatsSent = new LinkLabel { Text = "What gets sent?", Dock = DockStyle.Bottom, Height = 22, Padding = new Padding(12, 0, 12, 0) };
         whatsSent.LinkClicked += (_, _) => MessageBox.Show(this,
             "Each question is sent with these live readings (program names and numbers only; no window titles, files, " +
@@ -55,6 +56,11 @@ internal sealed class AskBuddyForm : Form
         Controls.Add(whatsSent);
         Controls.Add(_status);
 
+        FormClosed += (_, _) =>
+        {
+            _closing.Cancel();
+            _closing.Dispose();
+        };
         Load += (_, _) =>
         {
             Greet();
@@ -62,6 +68,13 @@ internal sealed class AskBuddyForm : Form
             if (!string.IsNullOrWhiteSpace(initialQuestion)) _input.Text = initialQuestion;
             _input.Focus();
         };
+    }
+
+    /// <summary>Puts a question in the box (used when the window is already open).</summary>
+    public void SetQuestion(string? question)
+    {
+        if (!string.IsNullOrWhiteSpace(question)) _input.Text = question;
+        _input.Focus();
     }
 
     private void Greet()
@@ -105,7 +118,8 @@ internal sealed class AskBuddyForm : Form
         var turns = new List<(bool, string)>(_history) { (true, Prompts.WithStats(_s, question)) };
         try
         {
-            string answer = await _s.Ai.Ask(Prompts.System, turns);
+            string answer = await _s.Ai.Ask(Prompts.System, turns, _closing.Token);
+            if (IsDisposed) return;
             _history.Add((true, question));
             _history.Add((false, answer));
             while (_history.Count > MaxTurnsKept) _history.RemoveRange(0, 2);
@@ -115,7 +129,16 @@ internal sealed class AskBuddyForm : Form
         }
         catch (AiUnavailableException ex)
         {
-            Ui.AppendBody(_transcript, ex.Message, Ui.Amber);
+            if (!IsDisposed) Ui.AppendBody(_transcript, ex.Message, Ui.Amber);
+        }
+        catch (OperationCanceledException)
+        {
+            // window closed mid-question
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Ask Buddy failed", ex);
+            if (!IsDisposed) Ui.AppendBody(_transcript, "Something went wrong. Try again (details are in the log).", Ui.Amber);
         }
         finally
         {

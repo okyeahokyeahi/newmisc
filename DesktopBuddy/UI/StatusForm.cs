@@ -24,8 +24,8 @@ internal sealed class StatusForm : Form
         AutoScaleDimensions = new SizeF(96F, 96F); // designed at 100%; WinForms scales up for 125%+
         AutoScaleMode = AutoScaleMode.Dpi;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(580, 600);
-        MinimumSize = new Size(480, 480);
+        ClientSize = new Size(600, 640);
+        MinimumSize = new Size(540, 600);
         Padding = new Padding(12);
 
         var tiles = new TableLayoutPanel { Dock = DockStyle.Top, Height = 84, ColumnCount = 4 };
@@ -42,6 +42,7 @@ internal sealed class StatusForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Padding = new Padding(4, 0, 0, 0),
             Font = new Font(Font, FontStyle.Bold),
+            AutoEllipsis = true,
         };
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 2, 0, 2) };
@@ -74,7 +75,7 @@ internal sealed class StatusForm : Form
         menu.Items.Add("What is this?", null, (_, _) => ExplainSelected());
         _apps.ContextMenuStrip = menu;
 
-        _footer = new Label { Dock = DockStyle.Bottom, Height = 150, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 6, 0, 0) };
+        _footer = new Label { Dock = DockStyle.Bottom, Height = 180, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 6, 0, 0), AutoEllipsis = true };
 
         // WinForms docks the last-added control first: footer, then tiles/heat/actions/heading, then the list fills the rest.
         Controls.Add(_apps);

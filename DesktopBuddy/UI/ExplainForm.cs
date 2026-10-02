@@ -14,6 +14,7 @@ internal sealed class ExplainForm : Form
     private readonly IReadOnlyList<string>? _reasons;
     private readonly RichTextBox _text = Ui.ReadOnlyText();
     private readonly Button _askButton;
+    private readonly CancellationTokenSource _closing = new();
 
     public ExplainForm(BuddyServices services, string name, string? path, IReadOnlyList<string>? reasons)
     {
@@ -34,6 +35,11 @@ internal sealed class ExplainForm : Form
         Controls.Add(padded);
         Controls.Add(Ui.ButtonRow(close, _askButton, showFile));
         Load += (_, _) => Fill();
+        FormClosed += (_, _) =>
+        {
+            _closing.Cancel();
+            _closing.Dispose();
+        };
     }
 
     private void Fill()
@@ -46,16 +52,18 @@ internal sealed class ExplainForm : Form
         {
             string? publisher = FileTrust.Publisher(_path);
             bool signed = FileTrust.IsSigned(_path);
+            bool windowsPart = FileTrust.IsWindowsComponent(_path);
             Ui.AppendHeading(_text, "Where it lives");
             Ui.AppendBody(_text, $"{_path}\nThat's {FileTrust.DescribeLocation(_path)}.");
             Ui.AppendHeading(_text, "Who made it");
             Ui.AppendBody(_text, signed
                     ? $"Digitally signed by {publisher ?? "a verified publisher"}."
-                    : "Not digitally signed. Many small legit tools aren't, but most malware isn't either.",
-                signed ? null : Ui.Amber);
+                    : windowsPart
+                        ? "Part of Windows (Microsoft signs these through Windows' own catalog)."
+                        : "Not digitally signed. Many small legit tools aren't, but most malware isn't either.",
+                signed || windowsPart ? null : Ui.Amber);
 
-            if (known != null && known.Kind is ProcessKind.WindowsCore or ProcessKind.WindowsChore &&
-                !_path.StartsWith(FileTrust.WindowsDir, StringComparison.OrdinalIgnoreCase))
+            if (known != null && known.Kind is ProcessKind.WindowsCore or ProcessKind.WindowsChore && !windowsPart)
             {
                 Ui.AppendBody(_text, "⚠ The real version of this Windows program lives in C:\\Windows. This copy doesn't. " +
                                      "That's a common malware disguise. Run a Defender scan.", Ui.Red);
@@ -95,14 +103,24 @@ internal sealed class ExplainForm : Form
         _askButton.Text = "Asking…";
         try
         {
-            string answer = await _s.Ai.Ask(Prompts.System, [(true, Prompts.ExplainProcess(_name, _path, _reasons))]);
+            string answer = await _s.Ai.Ask(Prompts.System, [(true, Prompts.ExplainProcess(_name, _path, _reasons))], _closing.Token);
+            if (IsDisposed) return;
             Ui.AppendHeading(_text, "AI's take (a hint, not a safety verdict)", Ui.Grey);
             Ui.AppendBody(_text, answer);
             _text.ScrollToCaret();
         }
         catch (AiUnavailableException ex)
         {
-            Ui.AppendBody(_text, ex.Message, Ui.Amber);
+            if (!IsDisposed) Ui.AppendBody(_text, ex.Message, Ui.Amber);
+        }
+        catch (OperationCanceledException)
+        {
+            // window closed mid-question
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Explain AI failed", ex);
+            if (!IsDisposed) Ui.AppendBody(_text, "Something went wrong. Try again (details are in the log).", Ui.Amber);
         }
         finally
         {

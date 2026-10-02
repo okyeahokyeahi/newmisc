@@ -40,7 +40,8 @@ public static class KnownProcesses
         Add(ProcessKind.WindowsCore, "Windows Explorer", "Your taskbar, Start menu and File Explorer.", "explorer");
         Add(ProcessKind.WindowsCore, "Windows login/security core", "Core Windows security and login processes. Never close these.", "lsass", "csrss", "winlogon", "wininit", "smss", "services", "lsaiso");
         Add(ProcessKind.WindowsCore, "Windows shell host", "Hosts parts of the Windows interface (Start, notifications, settings pages).", "sihost", "shellhost", "shellexperiencehost", "startmenuexperiencehost", "textinputhost", "ctfmon", "taskhostw", "runtimebroker", "applicationframehost", "systemsettings", "lockapp", "fontdrvhost", "dllhost", "conhost", "smartscreen", "securityhealthsystray", "securityhealthservice", "audiodg", "spoolsv", "wudfhost", "dashost", "unsecapp", "wlanext", "sgrmbroker", "registry", "memory compression", "system", "idle", "secure system");
-        Add(ProcessKind.WindowsCore, "Windows Search / Widgets", "Windows Search and the Widgets/news panel. Widgets use Edge WebView2 behind the scenes.", "searchhost", "searchapp", "widgets", "widgetservice", "phoneexperiencehost");
+        Add(ProcessKind.WindowsCore, "Windows Search / Widgets", "Windows Search and the Widgets/news panel. Widgets use Edge WebView2 behind the scenes.", "searchhost", "searchapp", "widgets", "widgetservice");
+        Add(ProcessKind.WindowsCore, "Phone Link", "Windows' Phone Link app (connects your phone). Uses WebView2.", "phoneexperiencehost", "phonelink");
         Add(ProcessKind.WindowsCore, "Microsoft Defender", "Windows' built-in antivirus. High CPU usually means a scan is running; it settles down by itself.", "msmpeng", "mpdefendercoreservice", "nissrv", "mpcmdrun");
 
         // --- Windows chores (temporary) ---

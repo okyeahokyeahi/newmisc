@@ -7,10 +7,10 @@ internal sealed class GameReportForm : Form
 {
     public GameReportForm(GameSessionReport r, Settings settings)
     {
-        Ui.Setup(this, $"Game report: {r.Game}", 500, 420);
+        Ui.Setup(this, $"Game report: {Diagnosis.FriendlyName(r.Game)}", 500, 420);
         var text = Ui.ReadOnlyText();
 
-        Ui.AppendHeading(text, $"{r.Game}: {Duration(r.Length)} (started {r.Started:HH:mm})");
+        Ui.AppendHeading(text, $"{Diagnosis.FriendlyName(r.Game)}: {Duration(r.Length)} (started {r.Started:HH:mm})");
 
         Ui.AppendHeading(text, "Temperatures");
         Ui.AppendBody(text, $"Peak CPU {Format.Temp(r.PeakCpuC)} · peak GPU {Format.Temp(r.PeakGpuC)}",

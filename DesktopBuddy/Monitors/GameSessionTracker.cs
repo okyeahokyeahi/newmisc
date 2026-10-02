@@ -24,6 +24,11 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
 {
     private static readonly string[] GameFolderHints = [@"\steamapps\common\", @"\Epic Games\", @"\Riot Games\", @"\XboxGames\", @"\EA Games\"];
 
+    // Things that live in game folders but aren't games (they'd keep game mode on forever).
+    private static readonly string[] NotGames =
+        ["wallpaper32", "wallpaper64", "webwallpaper32", "steamwebhelper", "crashhandler", "unitycrashhandler64", "easyanticheat",
+         "easyanticheat_eos", "beservice", "riotclientservices", "epicwebhelper", "launcher", "updater"];
+
     private readonly Dictionary<string, bool> _isGameCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _held = [];
     private readonly object _heldGate = new();
@@ -49,7 +54,7 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
             _lastSeen = now;
             if (!InSession)
             {
-                InSession = true;
+                lock (_heldGate) InSession = true;
                 _start = now;
                 _game = game;
                 _peakCpu = _peakGpu = null;
@@ -74,18 +79,21 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
     /// <summary>Called for alerts that arrive mid-game. Returns false if no game is running.</summary>
     public bool Hold(string alert)
     {
-        if (!InSession) return false;
-        lock (_heldGate) _held.Add($"{DateTime.Now:HH:mm} {alert}");
-        return true;
+        lock (_heldGate)
+        {
+            if (!InSession) return false;
+            _held.Add($"{DateTime.Now:HH:mm} {alert}");
+            return true;
+        }
     }
 
     private void End()
     {
-        InSession = false;
         TimeSpan length = _lastSeen - _start!.Value;
         List<string> held;
         lock (_heldGate)
         {
+            InSession = false;
             held = [.. _held];
             _held.Clear();
         }
@@ -110,7 +118,7 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
         foreach (AppUsage app in resources.Latest?.AllApps ?? [])
         {
             if (settings.GameProcessNames.Contains(app.Name, StringComparer.OrdinalIgnoreCase)) return app.Name;
-            if (app.CpuPercent >= 3 && IsInGameFolder(app.Name)) return app.Name;
+            if (app.CpuPercent >= 3 && !NotGames.Contains(app.Name.ToLowerInvariant()) && IsInGameFolder(app.Name)) return app.Name;
         }
         return NativeMethods.FullScreenGameRunning() ? "Full-screen game" : null;
     }

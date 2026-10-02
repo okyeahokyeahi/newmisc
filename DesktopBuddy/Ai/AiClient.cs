@@ -65,6 +65,26 @@ internal sealed class AiClient(Settings settings)
         if (usage.CallsToday >= settings.AiMaxCallsPerDay)
             throw new AiUnavailableException($"Daily limit of {settings.AiMaxCallsPerDay} AI questions reached. It resets tomorrow.");
 
+        lock (UsageGate)
+        {
+            // Reserve this call now so two windows asking at once can't both slip under the cap.
+            if (_inFlight >= 2) throw new AiUnavailableException("Still answering your last question. One moment.");
+            _inFlight++;
+        }
+        try
+        {
+            return await AskCore(key, system, turns, cancel);
+        }
+        finally
+        {
+            lock (UsageGate) _inFlight--;
+        }
+    }
+
+    private static int _inFlight;
+
+    private async Task<string> AskCore(string key, string system, IReadOnlyList<(bool FromUser, string Text)> turns, CancellationToken cancel)
+    {
         var client = new AnthropicClient { ApiKey = key, Timeout = TimeSpan.FromSeconds(90), MaxRetries = 1 };
         var request = new MessageCreateParams
         {
@@ -100,8 +120,14 @@ internal sealed class AiClient(Settings settings)
             Log.Error("AI request failed", ex);
             throw new AiUnavailableException("The AI service returned an error. Try again in a bit (details are in the log).");
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !cancel.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
+            throw; // the window was closed
+        }
+        catch (Exception ex) when (ex is AnthropicException or HttpRequestException or TaskCanceledException or IOException)
+        {
+            // AnthropicIOException (network) and AnthropicInvalidDataException land here too.
+            Log.Error("AI request failed (connection)", ex);
             throw new AiUnavailableException("Couldn't reach the AI service. Are you online?");
         }
 
@@ -112,8 +138,9 @@ internal sealed class AiClient(Settings settings)
 
         string text = string.Join("\n", response.Content
             .Select(b => b.TryPickText(out BetaTextBlock? t) ? t.Text : null)
-            .Where(t => !string.IsNullOrWhiteSpace(t)));
-        return text.Length > 0 ? text.Trim() : "(No answer came back. Try again.)";
+            .Where(t => !string.IsNullOrWhiteSpace(t))).Trim();
+        if (text.Length == 0) return "(No answer came back. Try again.)";
+        return response.StopReason == "max_tokens" ? text + "\n\n(Answer was cut short. Ask me to continue.)" : text;
     }
 
     private void Record(long inputTokens, long outputTokens)

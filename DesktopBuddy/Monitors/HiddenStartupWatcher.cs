@@ -38,7 +38,7 @@ public sealed class HiddenStartupWatcher
 
     public void Tick()
     {
-        Dictionary<string, string> current = ReadAll();
+        if (!TryReadAll(out Dictionary<string, string> current)) return; // partial read: don't save or compare it
         bool firstEverRun = false;
         if (_known == null)
         {
@@ -82,18 +82,20 @@ public sealed class HiddenStartupWatcher
             _ => StartupPlace.StartupFolder,
         };
 
-        string what = place switch
+        bool isNew = !_known!.ContainsKey(key);
+        string label = place switch
         {
-            StartupPlace.ScheduledTask => $"A new scheduled task \"{name}\"",
-            StartupPlace.Service => $"A new Windows service \"{name}\"",
-            _ => $"A new Startup-folder item \"{name}\"",
+            StartupPlace.ScheduledTask => "scheduled task",
+            StartupPlace.Service => "Windows service",
+            _ => "Startup-folder item",
         };
+        string what = $"{(isNew ? "New" : "Changed")} {label} \"{Short(name, 50)}\"";
 
         // Startup folder: rare enough to always mention.
         if (place == StartupPlace.StartupFolder)
         {
             Alert?.Invoke(new HiddenStartupAlert(place, "New startup item",
-                $"{what} will start with Windows: {Short(command)}. If you didn't just install something, click to look."));
+                $"{what} starts with Windows: {Short(command, 90)}. Didn't install anything? Click to look."));
             return;
         }
 
@@ -105,18 +107,17 @@ public sealed class HiddenStartupWatcher
         if (ScriptHosts.Contains(exeName) &&
             SuspiciousArgumentHints.Any(h => args.Contains(h, StringComparison.OrdinalIgnoreCase)))
         {
-            reason = $"it uses {exeName} to run something from a user folder or the internet";
+            reason = $"uses {exeName} to run something from a user folder or the internet";
         }
         else if (File.Exists(exe) && !FileTrust.IsInProtectedFolder(exe) && !FileTrust.IsSigned(exe))
         {
-            reason = $"it runs an unsigned program from {FileTrust.DescribeLocation(exe)}";
+            reason = $"runs an unsigned program from {FileTrust.DescribeLocation(exe)}";
         }
 
         if (reason == null) return; // looks like a normal updater; logged above
 
         Alert?.Invoke(new HiddenStartupAlert(place, "Something set itself to auto-start",
-            $"{what} was created and {reason}: {Short(command)}. Info-stealers hide like this. " +
-            "If you didn't just install something, click to review it."));
+            $"{what} {reason}: {Short(command, 80)}. Info-stealers hide like this. Didn't install anything? Click to review."));
     }
 
     private void CheckWinlogon()
@@ -145,26 +146,23 @@ public sealed class HiddenStartupWatcher
     }
 
     // ---------- Reading ----------
-    private static Dictionary<string, string> ReadAll()
+    private bool TryReadAll(out Dictionary<string, string> all)
     {
-        var all = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        ReadTasks(all);
-        ReadServices(all);
-        ReadStartupFolders(all);
-        return all;
+        all = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        return ReadTasks(all) & ReadServices(all) & ReadStartupFolders(all);
     }
 
-    private static void ReadTasks(Dictionary<string, string> into)
+    private static bool ReadTasks(Dictionary<string, string> into)
     {
-        IEnumerable<string> files;
+        List<string> files;
         try
         {
-            files = Directory.EnumerateFiles(TasksRoot, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true });
+            files = Directory.EnumerateFiles(TasksRoot, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true }).ToList();
         }
         catch (Exception ex)
         {
             Log.Error("Listing scheduled tasks failed", ex);
-            return;
+            return false;
         }
 
         foreach (string file in files)
@@ -184,14 +182,15 @@ public sealed class HiddenStartupWatcher
                 // unreadable or not a task file
             }
         }
+        return true;
     }
 
-    private static void ReadServices(Dictionary<string, string> into)
+    private static bool ReadServices(Dictionary<string, string> into)
     {
         try
         {
             using RegistryKey? services = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services");
-            if (services == null) return;
+            if (services == null) return false;
             foreach (string name in services.GetSubKeyNames())
             {
                 try
@@ -209,15 +208,18 @@ public sealed class HiddenStartupWatcher
                     // access denied on a few protected services
                 }
             }
+            return true;
         }
         catch (Exception ex)
         {
             Log.Error("Listing services failed", ex);
+            return false;
         }
     }
 
-    private static void ReadStartupFolders(Dictionary<string, string> into)
+    private bool ReadStartupFolders(Dictionary<string, string> into)
     {
+        bool ok = true;
         foreach (string folder in new[]
                  {
                      Environment.GetFolderPath(Environment.SpecialFolder.Startup),
@@ -236,27 +238,46 @@ public sealed class HiddenStartupWatcher
             catch (Exception ex)
             {
                 Log.Error($"Listing {folder} failed", ex);
+                ok = false;
             }
         }
+        return ok;
     }
 
-    private static string? ShortcutTarget(string file)
+    private readonly Dictionary<string, (DateTime Modified, string? Target)> _shortcutCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Where a .lnk points. Cached per file version so COM isn't spun up every minute.</summary>
+    private string? ShortcutTarget(string file)
     {
         if (!file.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return null;
+        DateTime modified = File.GetLastWriteTimeUtc(file);
+        if (_shortcutCache.TryGetValue(file, out var cached) && cached.Modified == modified) return cached.Target;
+
+        object? shell = null, shortcut = null;
+        string? result = null;
         try
         {
             Type? shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null) return null;
-            dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic shortcut = shell.CreateShortcut(file);
-            string target = shortcut.TargetPath;
-            string args = shortcut.Arguments;
-            return $"{target} {args}".Trim();
+            if (shellType != null)
+            {
+                shell = Activator.CreateInstance(shellType)!;
+                shortcut = ((dynamic)shell).CreateShortcut(file);
+                string target = ((dynamic)shortcut).TargetPath;
+                string args = ((dynamic)shortcut).Arguments;
+                result = $"{target} {args}".Trim();
+            }
         }
         catch
         {
-            return null;
+            // not a readable shortcut
         }
+        finally
+        {
+            if (shortcut != null && System.Runtime.InteropServices.Marshal.IsComObject(shortcut)) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut);
+            if (shell != null && System.Runtime.InteropServices.Marshal.IsComObject(shell)) System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
+        }
+        _shortcutCache[file] = (modified, result);
+        return result;
     }
 
     // ---------- Helpers ----------
@@ -283,8 +304,14 @@ public sealed class HiddenStartupWatcher
         }
         else
         {
-            int exeEnd = c.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
-            int cut = exeEnd >= 0 ? exeEnd + 4 : (c.IndexOf(' ') is int sp and >= 0 ? sp : c.Length);
+            // Unquoted paths can contain spaces ("C:\Program Files\x\y.cmd"), so cut after the first known extension.
+            int cut = -1;
+            foreach (string ext in new[] { ".exe", ".cmd", ".bat", ".ps1", ".vbs", ".js", ".com" })
+            {
+                int i = c.IndexOf(ext, StringComparison.OrdinalIgnoreCase);
+                if (i >= 0 && (cut < 0 || i + ext.Length < cut)) cut = i + ext.Length;
+            }
+            if (cut < 0) cut = c.IndexOf(' ') is int sp and >= 0 ? sp : c.Length;
             exe = c[..cut];
             args = c[cut..].Trim();
         }
@@ -297,7 +324,7 @@ public sealed class HiddenStartupWatcher
         return (exe, args);
     }
 
-    private static string Short(string text) => text.Length > 120 ? text[..117] + "..." : text;
+    private static string Short(string text, int max) => text.Length > max ? text[..(max - 3)] + "..." : text;
 
     private static Dictionary<string, string>? LoadBaseline()
     {

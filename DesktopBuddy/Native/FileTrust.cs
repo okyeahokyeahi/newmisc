@@ -21,9 +21,25 @@ internal static class FileTrust
 
     private static readonly (string Folder, string Label)[] RiskyFolders = BuildRiskyFolders();
 
-    /// <summary>Folders only admins can write to (Windows, Program Files).</summary>
+    // Windows' own files are mostly signed through a Windows "catalog" rather than inside the file, so the
+    // embedded-signature check calls them unsigned. These admin-only folders hold Windows components.
+    private static readonly string[] WindowsComponentFolders =
+    [
+        WindowsDir,
+        Dir(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps")),
+        Dir(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Microsoft", "Windows Defender")),
+    ];
+
+    /// <summary>Folders only admins can write to (Windows, Program Files, Defender's platform folder).</summary>
     public static bool IsInProtectedFolder(string path) =>
-        ProtectedFolders.Any(f => f.Length > 1 && path.StartsWith(f, StringComparison.OrdinalIgnoreCase));
+        ProtectedFolders.Concat(WindowsComponentFolders).Any(f => f.Length > 1 && path.StartsWith(f, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Part of Windows itself (Windows folder, Store/system apps, Defender).</summary>
+    public static bool IsWindowsComponent(string path) =>
+        WindowsComponentFolders.Any(f => path.StartsWith(f, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Signed, or a Windows component (catalog-signed). The practical "someone vouches for it" test.</summary>
+    public static bool IsTrustedPublisher(string path) => IsWindowsComponent(path) || IsSigned(path);
 
     /// <summary>"your Downloads folder" etc. if the file sits somewhere throwaway, otherwise null.</summary>
     public static string? RiskyFolderLabel(string path) =>
@@ -52,27 +68,41 @@ internal static class FileTrust
     /// True if the file has a valid embedded signature. Files signed only via a Windows catalog report
     /// false, so "unsigned" must never be treated as suspicious on its own. Unknown -> true.
     /// </summary>
-    public static bool IsSigned(string path) => SignatureCache.GetOrAdd(path, p =>
+    public static bool IsSigned(string path) => SignatureCache.GetOrAdd(CacheKey(path), _ =>
     {
         try
         {
-            return NativeMethods.HasValidEmbeddedSignature(p);
+            return NativeMethods.HasValidEmbeddedSignature(path);
         }
         catch (Exception ex)
         {
-            Log.Error($"Signature check failed for {p}", ex);
+            Log.Error($"Signature check failed for {path}", ex);
             return true;
         }
     });
 
-    /// <summary>Company name from the signing certificate, e.g. "NVIDIA Corporation", or null.</summary>
-    public static string? Publisher(string path) => PublisherCache.GetOrAdd(path, p =>
+    /// <summary>Path + size + timestamp, so a different file saved under the same name gets checked again.</summary>
+    private static string CacheKey(string path)
     {
         try
         {
-            if (!IsSigned(p)) return null;
+            var info = new FileInfo(path);
+            return $"{path}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+        }
+        catch
+        {
+            return path;
+        }
+    }
+
+    /// <summary>Company name from the signing certificate, e.g. "NVIDIA Corporation", or null.</summary>
+    public static string? Publisher(string path) => PublisherCache.GetOrAdd(CacheKey(path), _ =>
+    {
+        try
+        {
+            if (!IsSigned(path)) return null;
 #pragma warning disable SYSLIB0057 // simplest way to read an Authenticode signer
-            using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(p));
+            using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
 #pragma warning restore SYSLIB0057
             return cert.GetNameInfo(X509NameType.SimpleName, false);
         }
