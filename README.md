@@ -42,6 +42,25 @@ Right-click the tray icon for the menu, or double-click it for the live status w
 
 This catches junk, adware and sketchy downloads. **It is not antivirus**; keep Windows Defender on.
 
+## MAGI theme (optional)
+An Evangelion-style look for big decisions. Turn it on in the tray menu: **Look & sounds → MAGI theme**. A test vote
+plays straight away so you can see and hear it.
+
+- **What it does:** suspicious programs, risky downloads and the restart reminder open the **MAGI vote screen** instead
+  of a normal popup. **BALTHASAR·2** (you and your stuff), **CASPER·3** (security) and **MELCHIOR·1** (performance)
+  each vote 承認 (approve) or 否決 (deny) based on Desktop Buddy's own checks. Then the verdict lands, and you pick
+  what to do. MAGI only recommends; nothing happens until you click.
+- **Sounds:** built-in synthesized sounds by default. To use your own, open **Look & sounds → Open sounds folder**
+  and drop files named `deciding`, `approve`, `deny`, `resolve`, `alarm` or `tick` (`.wav` or `.mp3`).
+  - **Your Data transmission sound:** copy it into that folder and rename it to **`deciding.wav`**. It plays while
+    the cores decide and fades out at the verdict. Quiet files are levelled automatically.
+  - These files stay on your PC and are never part of the app or this repo.
+- **AI voices** (optional, needs an API key): each core gets a short in-character line. That's one AI call per vote,
+  about ⅕ of a cent on Haiku. The AI only voices the votes and can't change them.
+- **Quiet during games:** sounds stay quiet during games, and vote screens wait until you're out of a full-screen game.
+
+This is a fan homage. The visuals are original and no assets from the show are included.
+
 ## AI details (once you add an API key)
 - **Model:** pick it in tray menu → *Set API key…*. **Claude Haiku 4.5** is the default and recommended: the cheapest, at
   about ¼–½ cent per question. Sonnet 5.5 (~1¢) and Opus 5.5 (~1–3¢) are smarter options. On Sonnet/Opus, a question the
