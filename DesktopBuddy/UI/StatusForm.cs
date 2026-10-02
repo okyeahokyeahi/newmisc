@@ -18,7 +18,7 @@ internal sealed class StatusForm : Form
     {
         _s = services;
 
-        Text = "Desktop Buddy";
+        Text = $"Desktop Buddy {Updater.CurrentVersion.ToString(3)}";
         Icon = BuddyIcon.Create(BuddyMood.Calm);
         Font = new Font("Segoe UI", 9.5f);
         AutoScaleDimensions = new SizeF(96F, 96F); // designed at 100%; WinForms scales up for 125%+

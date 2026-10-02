@@ -4,9 +4,14 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write # to publish releases the app's updater downloads
+
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      VERSION: 1.1.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
@@ -15,9 +20,20 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Publish (self-contained, no .NET install needed)
-        run: dotnet publish DesktopBuddy/DesktopBuddy.csproj -c Release -r win-x64 --self-contained true -o publish
+        run: dotnet publish DesktopBuddy/DesktopBuddy.csproj -c Release -r win-x64 --self-contained true -p:Version=${{ env.VERSION }} -o publish
 
       - uses: actions/upload-artifact@v4
         with:
           name: DesktopBuddy-win-x64
           path: publish/
+
+      # Releases are public downloads (no GitHub login needed), so the app can update itself from them.
+      - name: Publish release
+        if: github.ref == 'refs/heads/claude/kind-lamport-blzivw'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path publish\* -DestinationPath DesktopBuddy-win-x64.zip
+          $notes = (git log -1 --pretty=%s) + "`n`nInstall: unzip and run DesktopBuddy.exe, or let Desktop Buddy update itself."
+          gh release create "v$env:VERSION" DesktopBuddy-win-x64.zip --title "Desktop Buddy $env:VERSION" --notes $notes --latest --target $env:GITHUB_SHA

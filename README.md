@@ -47,7 +47,8 @@ This catches junk, adware and sketchy downloads. **It is not antivirus**; keep W
 - More ideas are saved in [ROADMAP.md](ROADMAP.md).
 
 ## How to get it running
-1. On GitHub open the **Actions** tab → latest **Build Desktop Buddy** run → download **DesktopBuddy-win-x64** at the bottom.
+1. Open the repo's **Releases** page (https://github.com/okyeahokyeahi/newmisc/releases/latest) and download
+   **DesktopBuddy-win-x64.zip**. No GitHub login is needed.
 2. Unzip it somewhere permanent, e.g. `C:\Tools\DesktopBuddy`.
 3. **For CPU temperature:** install the free PawnIO driver once. Open *Terminal* and run
    `winget install namazso.PawnIO` (or download it from https://pawnio.eu). Without it, CPU temperature
@@ -59,6 +60,12 @@ This catches junk, adware and sketchy downloads. **It is not antivirus**; keep W
 **Start with Windows (optional):** Task Scheduler → *Create Task* → tick *Run with highest privileges* →
 Trigger *At log on* → Action *Start a program* → pick `DesktopBuddy.exe`. (A normal Startup shortcut
 would show a UAC prompt on every boot.)
+
+## Updating
+Desktop Buddy updates itself. A minute after it starts (and every 6 hours after that) it checks the Releases page. When a
+newer version exists you get an "Update available" notification: click it and the app downloads the new version, checks
+its SHA-256 checksum, swaps the files and restarts itself. Settings, the allow list, logs and your API key are kept.
+You can also check by hand: tray menu → *Check for updates*. Turn it off with `CheckForUpdates: false`.
 
 ## Settings
 Tray menu → *Edit settings* opens `%AppData%\DesktopBuddy\settings.json`. Restart the app after saving.

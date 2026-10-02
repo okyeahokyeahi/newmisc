@@ -28,6 +28,8 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 1000 };
     private readonly Queue<SuspiciousProcess> _pendingSuspicious = new();
     private readonly Task _loop;
+    private readonly System.Windows.Forms.Timer _updateTimer = new() { Interval = 60_000 };
+    private bool _updating;
 
     private StatusForm? _statusForm;
     private AskBuddyForm? _askForm;
@@ -102,6 +104,7 @@ internal sealed class BuddyContext : ApplicationContext
         menu.Items.Add(_pauseItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Set API key…", null, (_, _) => _services.ShowApiKey());
+        menu.Items.Add($"Check for updates (you have {Updater.CurrentVersion.ToString(3)})", null, async (_, _) => await CheckForUpdates(manual: true));
         menu.Items.Add("Edit settings (restart to apply)", null, (_, _) => OpenFile("notepad.exe", Settings.FilePath));
         menu.Items.Add("Open log folder", null, (_, _) => OpenFile("explorer.exe", Settings.Folder));
         menu.Items.Add(new ToolStripSeparator());
@@ -119,6 +122,16 @@ internal sealed class BuddyContext : ApplicationContext
 
         _uiTimer.Tick += (_, _) => UiTick();
         _uiTimer.Start();
+
+        if (settings.CheckForUpdates)
+        {
+            _updateTimer.Tick += async (_, _) =>
+            {
+                _updateTimer.Interval = (int)TimeSpan.FromHours(6).TotalMilliseconds;
+                await CheckForUpdates(manual: false);
+            };
+            _updateTimer.Start(); // first check a minute after startup
+        }
 
         Log.Info("Desktop Buddy started");
         _loop = Task.Run(() => MonitorLoop(_stop.Token));
@@ -386,6 +399,47 @@ internal sealed class BuddyContext : ApplicationContext
         return copies;
     }
 
+    // ---------- Self-update ----------
+    private async Task CheckForUpdates(bool manual)
+    {
+        if (_updating) return;
+        try
+        {
+            UpdateInfo? update = await Updater.CheckAsync();
+            if (update == null)
+            {
+                if (manual) Notify("You're up to date", $"Desktop Buddy {Updater.CurrentVersion.ToString(3)} is the latest version.", ToolTipIcon.Info, critical: true);
+                return;
+            }
+            Notify($"Update available: {update.Version.ToString(3)}",
+                "Click to install it. Takes about 30 seconds; Desktop Buddy restarts by itself and keeps your settings.",
+                ToolTipIcon.Info, critical: manual, onClick: () => _ = InstallUpdate(update));
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Update check failed", ex);
+            if (manual) Notify("Couldn't check for updates", "GitHub couldn't be reached. Are you online?", ToolTipIcon.Warning, critical: true);
+        }
+    }
+
+    private async Task InstallUpdate(UpdateInfo update)
+    {
+        if (_updating) return;
+        _updating = true;
+        Notify("Updating…", $"Downloading Desktop Buddy {update.Version.ToString(3)}. It will restart in a moment.", ToolTipIcon.Info, critical: true);
+        try
+        {
+            if (await Updater.PrepareAndLaunchAsync(update)) ExitThread();
+        }
+        catch (Exception ex)
+        {
+            _updating = false;
+            Log.Error("Update failed", ex);
+            Notify("Update failed", ex is InvalidOperationException ? ex.Message : "The download didn't work. Try again later (details in the log).",
+                ToolTipIcon.Error, critical: true);
+        }
+    }
+
     // ---------- Windows ----------
     private void ShowStatus()
     {
@@ -453,6 +507,7 @@ internal sealed class BuddyContext : ApplicationContext
         Log.Info("Desktop Buddy exiting");
         _stop.Cancel();
         _uiTimer.Stop();
+        _updateTimer.Stop();
         _tray.Visible = false;
         bool loopStopped;
         try { loopStopped = _loop.Wait(TimeSpan.FromSeconds(10)); } catch { loopStopped = true; }

@@ -59,6 +59,9 @@ public sealed class Settings
         "cs2", "GTA5", "GTA5_Enhanced", "r5apex", "r5apex_dx12", "RocketLeague",
     ];
 
+    /// <summary>Check GitHub for a newer version at startup and every few hours.</summary>
+    public bool CheckForUpdates { get; set; } = true;
+
     // --- AI (only used once you add an API key) ---
     public string AiModel { get; set; } = "claude-opus-5-5";
     public double AiMonthlyBudgetUsd { get; set; } = 2.00;
