@@ -3,7 +3,13 @@ using Microsoft.Win32;
 
 namespace DesktopBuddy.Monitors;
 
-public sealed record TemperatureSnapshot(double? CpuC, double? GpuC, string? CpuName, string? GpuName);
+public sealed record TemperatureSnapshot(
+    double? CpuC,
+    double? GpuC,
+    string? CpuName,
+    string? GpuName,
+    double? CpuDistanceToTjMax, // degrees left before the CPU's own heat limit (Intel); 0 = at the limit
+    double? CpuClockMhz);       // average core clock right now
 
 /// <summary>Reads CPU/GPU temperatures through LibreHardwareMonitor. Read-only: it never changes fan speeds.</summary>
 public sealed class TemperatureMonitor(Settings settings) : IDisposable
@@ -44,7 +50,7 @@ public sealed class TemperatureMonitor(Settings settings) : IDisposable
     {
         if (!_opened) return;
 
-        double? cpu = null, gpu = null;
+        double? cpu = null, gpu = null, cpuHeadroom = null, cpuClock = null;
         string? cpuName = null, gpuName = null;
         int bestGpuRank = -1;
 
@@ -54,16 +60,30 @@ public sealed class TemperatureMonitor(Settings settings) : IDisposable
             foreach (IHardware sub in hardware.SubHardware) sub.Update();
 
             var temps = hardware.Sensors
-                .Where(s => s.SensorType == SensorType.Temperature && s.Value is > 0 and < 150)
+                .Where(s => s.SensorType == SensorType.Temperature && s.Value is > 0 and < 150 &&
+                            !s.Name.Contains("Distance to TjMax", StringComparison.OrdinalIgnoreCase))
                 .ToList();
-            if (temps.Count == 0) continue;
 
             if (hardware.HardwareType == HardwareType.Cpu)
             {
-                cpu = Pick(temps, "CPU Package", "Core Max", "Core Average");
+                if (temps.Count > 0) cpu = Pick(temps, "CPU Package", "Core Max", "Core Average");
                 cpuName = hardware.Name;
+
+                var headroom = hardware.Sensors
+                    .Where(s => s.SensorType == SensorType.Temperature && s.Value is >= 0 and < 150 &&
+                                s.Name.Contains("Distance to TjMax", StringComparison.OrdinalIgnoreCase))
+                    .Select(s => (double)s.Value!.Value)
+                    .ToList();
+                if (headroom.Count > 0) cpuHeadroom = headroom.Min();
+
+                var clocks = hardware.Sensors
+                    .Where(s => s.SensorType == SensorType.Clock && s.Value is > 100 &&
+                                s.Name.StartsWith("Core #", StringComparison.OrdinalIgnoreCase))
+                    .Select(s => (double)s.Value!.Value)
+                    .ToList();
+                if (clocks.Count > 0) cpuClock = clocks.Average();
             }
-            else if (GpuRank(hardware.HardwareType) is int rank and >= 0 && rank > bestGpuRank)
+            else if (temps.Count > 0 && GpuRank(hardware.HardwareType) is int rank and >= 0 && rank > bestGpuRank)
             {
                 // Prefer the dedicated GPU (the RTX card) over the Intel integrated one.
                 bestGpuRank = rank;
@@ -76,7 +96,7 @@ public sealed class TemperatureMonitor(Settings settings) : IDisposable
             : !PawnIoInstalled() ? "CPU temp needs the free PawnIO driver: run \"winget install namazso.PawnIO\" (or get it from pawnio.eu), then restart Desktop Buddy."
             : "CPU temp unavailable. Make sure Desktop Buddy runs as administrator.";
 
-        Latest = new TemperatureSnapshot(cpu, gpu, cpuName, gpuName);
+        Latest = new TemperatureSnapshot(cpu, gpu, cpuName, gpuName, cpuHeadroom, cpuClock);
         CheckAlert("CPU", cpu, settings.CpuTempWarnC);
         CheckAlert("GPU", gpu, settings.GpuTempWarnC);
     }

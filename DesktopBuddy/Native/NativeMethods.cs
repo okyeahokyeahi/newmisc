@@ -57,6 +57,28 @@ internal static class NativeMethods
         return state is 2 or 3 or 4;
     }
 
+    /// <summary>True while an exclusive full-screen Direct3D app (almost always a game) is in front.</summary>
+    public static bool FullScreenGameRunning() =>
+        SHQueryUserNotificationState(out int state) == 0 && state == 3;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LASTINPUTINFO
+    {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+
+    /// <summary>How long since the last mouse/keyboard input.</summary>
+    public static TimeSpan IdleTime()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        if (!GetLastInputInfo(ref info)) return TimeSpan.Zero;
+        return TimeSpan.FromMilliseconds(unchecked((uint)Environment.TickCount - info.dwTime));
+    }
+
     // ---------- Memory ----------
     [StructLayout(LayoutKind.Sequential)]
     public sealed class MEMORYSTATUSEX

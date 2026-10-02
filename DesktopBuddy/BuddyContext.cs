@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DesktopBuddy.Ai;
 using DesktopBuddy.Monitors;
 using DesktopBuddy.Native;
 using DesktopBuddy.UI;
@@ -11,7 +12,15 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly Settings _settings;
     private readonly ResourceMonitor _resources;
     private readonly TemperatureMonitor _temps;
+    private readonly HeatSlowdownMonitor _heat;
     private readonly SuspiciousProcessScanner _scanner;
+    private readonly DefenderMonitor _defender;
+    private readonly HiddenStartupWatcher _hiddenStartup;
+    private readonly DiskMonitor _disk;
+    private readonly GameSessionTracker _games;
+    private readonly IdleHogWatcher _idleHogs;
+    private readonly DownloadsWatcher? _downloads;
+    private readonly BuddyServices _services;
     private readonly SynchronizationContext _ui;
     private readonly CancellationTokenSource _stop = new();
     private readonly NotifyIcon _tray;
@@ -21,9 +30,11 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly Task _loop;
 
     private StatusForm? _statusForm;
+    private AskBuddyForm? _askForm;
     private bool _suspiciousDialogOpen;
     private DateTime _pausedUntil = DateTime.MinValue;
     private BuddyMood? _currentMood;
+    private Action? _balloonClick;
 
     public BuddyContext(Settings settings)
     {
@@ -31,19 +42,66 @@ internal sealed class BuddyContext : ApplicationContext
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _resources = new ResourceMonitor(settings);
         _temps = new TemperatureMonitor(settings);
+        _heat = new HeatSlowdownMonitor(settings, _temps);
         _scanner = new SuspiciousProcessScanner(settings);
+        _defender = new DefenderMonitor();
+        _hiddenStartup = new HiddenStartupWatcher();
+        _disk = new DiskMonitor(settings);
+        _games = new GameSessionTracker(settings, _resources, _temps, _heat);
+        _idleHogs = new IdleHogWatcher(settings, _resources);
 
-        _resources.Alert += (title, text) => _ui.Post(_ => Notify(title, text), null);
-        _temps.Alert += (title, text) => _ui.Post(_ => Notify(title, text), null);
-        _scanner.Alert += (title, text) => _ui.Post(_ => Notify(title, text), null);
-        _scanner.Flagged += item => _ui.Post(_ => EnqueueSuspicious(item), null);
+        _services = new BuddyServices
+        {
+            Settings = settings,
+            Resources = _resources,
+            Temps = _temps,
+            Heat = _heat,
+            Scanner = _scanner,
+            Defender = _defender,
+            Disk = _disk,
+            Games = _games,
+            Ai = new AiClient(settings),
+            ShowDiagnosis = ShowDiagnosis,
+            ShowAsk = ShowAsk,
+            ShowExplain = (name, path, reasons) => new ExplainForm(_services!, name, path, reasons).Show(),
+            ShowApiKey = () => { using var d = new ApiKeyDialog(); d.ShowDialog(); },
+        };
+
+        // Monitors run on a background thread; every alert hops to the UI thread here.
+        void OnUi(Action action) => _ui.Post(_ => action(), null);
+        _resources.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: ShowDiagnosis));
+        _temps.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: ShowDiagnosis));
+        _heat.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: ShowDiagnosis));
+        _disk.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: () => OpenUri("ms-settings:storagesense")));
+        _scanner.Alert += (title, text) => OnUi(() => Notify(title, text, onClick: () => OpenUri("ms-settings:startupapps")));
+        _scanner.Flagged += item => OnUi(() => EnqueueSuspicious(item));
+        _defender.Alert += (title, text, critical) => OnUi(() =>
+            Notify(title, text, critical: critical, onClick: () => OpenUri("windowsdefender://threatsettings")));
+        _hiddenStartup.Alert += alert => OnUi(() => Notify(alert.Title, alert.Message, onClick: () => OpenStartupPlace(alert.Place)));
+        _games.SessionEnded += report => OnUi(() => OnGameEnded(report));
+        _idleHogs.Report += findings => OnUi(() => OnIdleHogs(findings));
+
+        if (settings.WatchDownloads)
+        {
+            try
+            {
+                _downloads = new DownloadsWatcher();
+                _downloads.Downloaded += report => OnUi(() => OnDownload(report));
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Starting the Downloads watcher failed", ex);
+            }
+        }
 
         _pauseItem = new ToolStripMenuItem("Pause alerts for 1 hour", null, (_, _) => TogglePause());
         var menu = new ContextMenuStrip();
         menu.Items.Add(new ToolStripMenuItem("Open Desktop Buddy", null, (_, _) => ShowStatus()) { Font = new Font(menu.Font, FontStyle.Bold) });
+        menu.Items.Add("Why is it slow / loud?", null, (_, _) => ShowDiagnosis());
+        menu.Items.Add("Ask Buddy…", null, (_, _) => ShowAsk(null));
         menu.Items.Add(_pauseItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Set API key…", null, (_, _) => { using var d = new ApiKeyDialog(); d.ShowDialog(); });
+        menu.Items.Add("Set API key…", null, (_, _) => _services.ShowApiKey());
         menu.Items.Add("Edit settings (restart to apply)", null, (_, _) => OpenFile("notepad.exe", Settings.FilePath));
         menu.Items.Add("Open log folder", null, (_, _) => OpenFile("explorer.exe", Settings.Folder));
         menu.Items.Add(new ToolStripSeparator());
@@ -57,14 +115,14 @@ internal sealed class BuddyContext : ApplicationContext
         };
         SetMood(BuddyMood.Calm);
         _tray.DoubleClick += (_, _) => ShowStatus();
-        _tray.BalloonTipClicked += (_, _) => ShowStatus();
+        _tray.BalloonTipClicked += (_, _) => (_balloonClick ?? ShowStatus)();
 
         _uiTimer.Tick += (_, _) => UiTick();
         _uiTimer.Start();
 
         Log.Info("Desktop Buddy started");
         _loop = Task.Run(() => MonitorLoop(_stop.Token));
-        Notify("Desktop Buddy is running", "I'm in the system tray. Double-click me for live stats.", force: true, ToolTipIcon.Info);
+        Notify("Desktop Buddy is running", "I'm in the system tray. Double-click me for live stats.", ToolTipIcon.Info, critical: true);
     }
 
     private bool Paused => DateTime.Now < _pausedUntil;
@@ -73,16 +131,32 @@ internal sealed class BuddyContext : ApplicationContext
     private async Task MonitorLoop(CancellationToken token)
     {
         _temps.Open();
-        DateTime nextScan = DateTime.MinValue;
+        DateTime nextScan = DateTime.MinValue, nextSlow = DateTime.MinValue, nextDisk = DateTime.MinValue;
 
         while (!token.IsCancellationRequested)
         {
+            DateTime now = DateTime.UtcNow;
             Safe("resource monitor", _resources.Tick);
             Safe("temperature monitor", _temps.Tick);
-            if (_settings.ScanForSuspiciousProcesses && DateTime.UtcNow >= nextScan)
+            Safe("heat slowdown monitor", _heat.Tick);
+            Safe("game tracker", _games.Tick);
+            Safe("idle hog watcher", () => _idleHogs.Tick(_games.InSession));
+
+            if (_settings.ScanForSuspiciousProcesses && now >= nextScan)
             {
                 Safe("process scanner", _scanner.Tick);
-                nextScan = DateTime.UtcNow.AddSeconds(Math.Max(5, _settings.ScanIntervalSeconds));
+                nextScan = now.AddSeconds(Math.Max(5, _settings.ScanIntervalSeconds));
+            }
+            if (now >= nextSlow)
+            {
+                if (_settings.WatchDefender) Safe("Defender monitor", _defender.Tick);
+                if (_settings.WatchHiddenStartup) Safe("hidden startup watcher", _hiddenStartup.Tick);
+                nextSlow = now.AddSeconds(60);
+            }
+            if (now >= nextDisk)
+            {
+                Safe("disk monitor", _disk.Tick);
+                nextDisk = now.AddMinutes(10);
             }
 
             try
@@ -113,17 +187,21 @@ internal sealed class BuddyContext : ApplicationContext
     {
         TemperatureSnapshot? t = _temps.Latest;
         ResourceSnapshot? r = _resources.Latest;
+        HeatSlowdownSnapshot? h = _heat.Latest;
 
         string tip = $"Desktop Buddy\nCPU {Format.Temp(t?.CpuC)} · GPU {Format.Temp(t?.GpuC)}";
         if (r != null) tip += $"\nLoad {r.CpuPercent:0}% · RAM {r.RamPercent}%";
-        if (Paused) tip += "\nAlerts paused";
+        if (h?.CpuSlowingNow == true || h?.GpuSlowingNow == true) tip += "\nSlowing down from heat!";
+        if (_games.InSession) tip += "\nGame mode";
+        else if (Paused) tip += "\nAlerts paused";
         _tray.Text = tip.Length > 127 ? tip[..127] : tip;
 
         double hottestOverLimit = Math.Max(
             (t?.CpuC ?? 0) - _settings.CpuTempWarnC,
             (t?.GpuC ?? 0) - _settings.GpuTempWarnC);
+        bool slowing = h?.CpuSlowingNow == true || h?.GpuSlowingNow == true;
         SetMood(Paused ? BuddyMood.Paused
-            : _temps.SustainedHot ? BuddyMood.Hot
+            : _temps.SustainedHot || slowing ? BuddyMood.Hot
             : hottestOverLimit >= -10 ? BuddyMood.Warm // includes short spikes over the limit
             : BuddyMood.Calm);
 
@@ -140,10 +218,19 @@ internal sealed class BuddyContext : ApplicationContext
         old?.Dispose();
     }
 
-    private void Notify(string title, string text, bool force = false, ToolTipIcon icon = ToolTipIcon.Warning)
+    /// <summary>
+    /// Shows a notification. Non-critical ones are dropped while paused and held for the game report
+    /// during a game. Critical ones (antivirus switched off, new Defender exclusion) always show.
+    /// </summary>
+    private void Notify(string title, string text, ToolTipIcon icon = ToolTipIcon.Warning, bool critical = false, Action? onClick = null)
     {
         Log.Info($"Alert: {title}: {text}");
-        if (Paused && !force) return;
+        if (!critical)
+        {
+            if (Paused) return;
+            if (_games.Hold($"{title}: {text}")) return;
+        }
+        _balloonClick = onClick;
         _tray.ShowBalloonTip(8000, title, text, icon);
     }
 
@@ -153,6 +240,47 @@ internal sealed class BuddyContext : ApplicationContext
         UiTick();
     }
 
+    // ---------- Feature handlers ----------
+    private void OnGameEnded(GameSessionReport report)
+    {
+        bool throttled = report.CpuHeatSlowdown > TimeSpan.FromSeconds(10) || report.GpuHeatSlowdown > TimeSpan.FromSeconds(10);
+        string text = $"{(int)report.Length.TotalMinutes} min · peak CPU {Format.Temp(report.PeakCpuC)}, GPU {Format.Temp(report.PeakGpuC)}, RAM {report.PeakRamPercent}%" +
+                      (throttled ? " · slowed down from heat" : "") +
+                      (report.HeldAlerts.Count > 0 ? $" · {report.HeldAlerts.Count} alert(s) waiting" : "") +
+                      ". Click for the report.";
+        Notify($"Game over: {report.Game}", text, throttled || report.HeldAlerts.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
+            onClick: () => new GameReportForm(report, _settings).Show());
+    }
+
+    private void OnIdleHogs(IReadOnlyList<IdleHogFinding> findings)
+    {
+        IdleHogFinding top = findings.OrderByDescending(f => f.Duration).First();
+        string others = findings.Count > 1 ? $" (+{findings.Count - 1} more)" : "";
+        Notify("Something worked hard while you were away",
+            $"{top.Name} used {top.What} for {(int)top.Duration.TotalMinutes}+ min while you weren't using the PC{others}. " +
+            "Hidden crypto-miners do this. Click to see what it is.",
+            onClick: () => _services.ShowExplain(top.Name, top.ExePath,
+                [$"Used {top.What} for {(int)top.Duration.TotalMinutes}+ minutes while the computer was idle."]));
+    }
+
+    private void OnDownload(DownloadReport report)
+    {
+        string from = report.FromHost != null
+            ? $"From {report.FromHost}{(report.ViaHost != null && report.ViaHost != report.FromHost ? $" (via {report.ViaHost})" : "")}. "
+            : "";
+        string warnings = report.Warnings.Count > 0 ? "⚠ " + string.Join(" ", report.Warnings) + " " : "";
+        Notify($"Downloaded: {report.FileName}", $"{from}{warnings}Click to scan it with Defender.",
+            report.Warnings.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
+            onClick: () => _ = ScanDownload(report.FilePath));
+    }
+
+    private async Task ScanDownload(string path)
+    {
+        Notify("Scanning…", $"Defender is checking {Path.GetFileName(path)}.", ToolTipIcon.Info, critical: true);
+        var (clean, message) = await DownloadsWatcher.ScanWithDefender(path);
+        Notify(clean ? "Scan finished" : "Scan result", message, clean ? ToolTipIcon.Info : ToolTipIcon.Error, critical: true);
+    }
+
     private void EnqueueSuspicious(SuspiciousProcess item)
     {
         _pendingSuspicious.Enqueue(item);
@@ -160,12 +288,12 @@ internal sealed class BuddyContext : ApplicationContext
     }
 
     /// <summary>
-    /// One dialog at a time. Held back while alerts are paused or a full-screen game/video is in
-    /// front, so it never yanks you out of a game.
+    /// One dialog at a time. Held back while alerts are paused, a game is running, or anything
+    /// full-screen is in front, so it never yanks you out of a game.
     /// </summary>
     private void ShowNextSuspicious()
     {
-        if (_suspiciousDialogOpen || Paused || NativeMethods.UserIsBusy()) return;
+        if (_suspiciousDialogOpen || Paused || _games.InSession || NativeMethods.UserIsBusy()) return;
 
         while (_pendingSuspicious.Count > 0)
         {
@@ -182,7 +310,11 @@ internal sealed class BuddyContext : ApplicationContext
             try
             {
                 SuspiciousChoice choice;
-                using (var dialog = new SuspiciousProcessDialog(item))
+                using (var dialog = new SuspiciousProcessDialog(item, explain: p =>
+                       {
+                           using var explainForm = new ExplainForm(_services, Path.GetFileNameWithoutExtension(p.Name), p.ExePath, p.Reasons);
+                           explainForm.ShowDialog();
+                       }))
                 {
                     dialog.ShowDialog();
                     choice = dialog.Choice;
@@ -222,7 +354,7 @@ internal sealed class BuddyContext : ApplicationContext
                 }
                 _scanner.ForgetReport(item.ExePath); // if it comes back, tell me again
                 if (failures.Count == 0)
-                    Notify("Closed", $"{item.Name} was closed.", force: true, ToolTipIcon.Info);
+                    Notify("Closed", $"{item.Name} was closed.", ToolTipIcon.Info, critical: true);
                 else
                     MessageBox.Show($"Couldn't close {item.Name}: {failures[0]}", "Desktop Buddy",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -254,6 +386,7 @@ internal sealed class BuddyContext : ApplicationContext
         return copies;
     }
 
+    // ---------- Windows ----------
     private void ShowStatus()
     {
         if (_statusForm is { IsDisposed: false })
@@ -261,9 +394,46 @@ internal sealed class BuddyContext : ApplicationContext
             _statusForm.Activate();
             return;
         }
-        _statusForm = new StatusForm(_settings, _resources, _temps, _scanner);
+        _statusForm = new StatusForm(_services);
         _statusForm.FormClosed += (_, _) => _statusForm = null;
         _statusForm.Show();
+    }
+
+    private void ShowDiagnosis() => new DiagnosisForm(_services).Show();
+
+    private void ShowAsk(string? question)
+    {
+        if (_askForm is { IsDisposed: false })
+        {
+            _askForm.Activate();
+            return;
+        }
+        _askForm = new AskBuddyForm(_services, question);
+        _askForm.FormClosed += (_, _) => _askForm = null;
+        _askForm.Show();
+    }
+
+    private static void OpenStartupPlace(StartupPlace place)
+    {
+        switch (place)
+        {
+            case StartupPlace.ScheduledTask: OpenFile("mmc.exe", "taskschd.msc"); break;
+            case StartupPlace.Service: OpenFile("mmc.exe", "services.msc"); break;
+            case StartupPlace.StartupFolder: OpenFile("explorer.exe", Environment.GetFolderPath(Environment.SpecialFolder.Startup)); break;
+            default: OpenUri("windowsdefender://threat"); break;
+        }
+    }
+
+    private static void OpenUri(string uri)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Opening {uri} failed", ex);
+        }
     }
 
     private static void OpenFile(string program, string path)
@@ -286,9 +456,16 @@ internal sealed class BuddyContext : ApplicationContext
         _tray.Visible = false;
         bool loopStopped;
         try { loopStopped = _loop.Wait(TimeSpan.FromSeconds(10)); } catch { loopStopped = true; }
-        if (loopStopped) _temps.Dispose(); // never close the sensor driver while a read is still running
+        if (loopStopped)
+        {
+            _temps.Dispose(); // never close the sensor driver while a read is still running
+            _idleHogs.Dispose();
+            Nvml.Close();
+        }
+        _downloads?.Dispose();
         _tray.Dispose();
         _statusForm?.Close();
+        _askForm?.Close();
         base.ExitThreadCore();
     }
 }

@@ -10,7 +10,7 @@ internal sealed class SuspiciousProcessDialog : Form
 {
     public SuspiciousChoice Choice { get; private set; } = SuspiciousChoice.Ignore;
 
-    public SuspiciousProcessDialog(SuspiciousProcess item)
+    public SuspiciousProcessDialog(SuspiciousProcess item, Action<SuspiciousProcess>? explain = null)
     {
         Text = "Desktop Buddy: suspicious program";
         Icon = SystemIcons.Warning;
@@ -66,6 +66,12 @@ internal sealed class SuspiciousProcessDialog : Form
         var show = new Button { Text = "Show file", AutoSize = true };
         show.Click += (_, _) => Process.Start("explorer.exe", $"/select,\"{item.ExePath}\"");
         buttons.Controls.Add(show);
+        if (explain != null)
+        {
+            var whatIsIt = new Button { Text = "What is this?", AutoSize = true };
+            whatIsIt.Click += (_, _) => explain(item);
+            buttons.Controls.Add(whatIsIt);
+        }
         layout.Controls.Add(buttons);
 
         Controls.Add(layout);

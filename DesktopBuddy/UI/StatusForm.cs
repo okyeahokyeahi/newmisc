@@ -1,27 +1,22 @@
+using DesktopBuddy.Ai;
 using DesktopBuddy.Monitors;
-using DesktopBuddy.Native;
 
 namespace DesktopBuddy.UI;
 
-/// <summary>The window you get from the tray: live temps, CPU/RAM, and the heaviest apps.</summary>
+/// <summary>The window you get from the tray: live temps, CPU/RAM, heat slowdowns and the heaviest apps.</summary>
 internal sealed class StatusForm : Form
 {
-    private readonly ResourceMonitor _resources;
-    private readonly TemperatureMonitor _temps;
-    private readonly SuspiciousProcessScanner _scanner;
-    private readonly Settings _settings;
+    private readonly BuddyServices _s;
     private readonly Label _cpuTemp, _gpuTemp, _cpuLoad, _ram;
+    private readonly Label _heatLine;
     private readonly ListView _apps;
     private readonly Label _footer;
     private readonly ToolTip _tooltip = new();
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 2000 };
 
-    public StatusForm(Settings settings, ResourceMonitor resources, TemperatureMonitor temps, SuspiciousProcessScanner scanner)
+    public StatusForm(BuddyServices services)
     {
-        _settings = settings;
-        _resources = resources;
-        _temps = temps;
-        _scanner = scanner;
+        _s = services;
 
         Text = "Desktop Buddy";
         Icon = BuddyIcon.Create(BuddyMood.Calm);
@@ -29,8 +24,8 @@ internal sealed class StatusForm : Form
         AutoScaleDimensions = new SizeF(96F, 96F); // designed at 100%; WinForms scales up for 125%+
         AutoScaleMode = AutoScaleMode.Dpi;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(560, 470);
-        MinimumSize = new Size(460, 380);
+        ClientSize = new Size(580, 600);
+        MinimumSize = new Size(480, 480);
         Padding = new Padding(12);
 
         var tiles = new TableLayoutPanel { Dock = DockStyle.Top, Height = 84, ColumnCount = 4 };
@@ -40,9 +35,22 @@ internal sealed class StatusForm : Form
         tiles.Controls.Add(Tile("CPU load", out _cpuLoad), 2, 0);
         tiles.Controls.Add(Tile("RAM", out _ram), 3, 0);
 
+        _heatLine = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 28,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(4, 0, 0, 0),
+            Font = new Font(Font, FontStyle.Bold),
+        };
+
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 2, 0, 2) };
+        actions.Controls.Add(Ui.Button("Why is it slow / loud?", (_, _) => _s.ShowDiagnosis()));
+        actions.Controls.Add(Ui.Button("Ask Buddy", (_, _) => _s.ShowAsk(null)));
+
         var heading = new Label
         {
-            Text = "Heaviest apps right now",
+            Text = "Heaviest apps right now (double-click one to ask \"what is this?\")",
             Dock = DockStyle.Top,
             Height = 30,
             Font = new Font(Font, FontStyle.Bold),
@@ -60,20 +68,28 @@ internal sealed class StatusForm : Form
         _apps.Columns.Add("CPU", 70, HorizontalAlignment.Right);
         _apps.Columns.Add("Memory", 90, HorizontalAlignment.Right);
         _apps.Columns.Add("Processes", 80, HorizontalAlignment.Right);
+        _apps.DoubleClick += (_, _) => ExplainSelected();
+        _apps.Resize += (_, _) => StretchFirstColumn();
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("What is this?", null, (_, _) => ExplainSelected());
+        _apps.ContextMenuStrip = menu;
 
-        _footer = new Label { Dock = DockStyle.Bottom, Height = 90, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 6, 0, 0) };
+        _footer = new Label { Dock = DockStyle.Bottom, Height = 150, ForeColor = SystemColors.GrayText, Padding = new Padding(0, 6, 0, 0) };
 
+        // WinForms docks the last-added control first: footer, then tiles/heat/actions/heading, then the list fills the rest.
         Controls.Add(_apps);
         Controls.Add(heading);
+        Controls.Add(actions);
+        Controls.Add(_heatLine);
         Controls.Add(tiles);
         Controls.Add(_footer);
 
         _refresh.Tick += (_, _) => RefreshData();
         Load += (_, _) =>
         {
-            // Sit above the tray, bottom-right of the main screen.
             Rectangle area = Screen.PrimaryScreen!.WorkingArea;
             Location = new Point(area.Right - Width - 12, area.Bottom - Height - 12);
+            StretchFirstColumn();
             RefreshData();
             _refresh.Start();
         };
@@ -100,40 +116,103 @@ internal sealed class StatusForm : Form
         return panel;
     }
 
+    private void StretchFirstColumn()
+    {
+        int others = _apps.Columns[1].Width + _apps.Columns[2].Width + _apps.Columns[3].Width;
+        int width = _apps.ClientSize.Width - others - 4;
+        if (width > 120) _apps.Columns[0].Width = width;
+    }
+
+    private void ExplainSelected()
+    {
+        if (_apps.SelectedItems.Count == 0) return;
+        _s.ShowExplain(_apps.SelectedItems[0].Text, null, null);
+    }
+
     private void RefreshData()
     {
-        TemperatureSnapshot? t = _temps.Latest;
-        SetTemp(_cpuTemp, t?.CpuC, _settings.CpuTempWarnC);
-        SetTemp(_gpuTemp, t?.GpuC, _settings.GpuTempWarnC);
+        TemperatureSnapshot? t = _s.Temps.Latest;
+        SetTemp(_cpuTemp, t?.CpuC, _s.Settings.CpuTempWarnC);
+        SetTemp(_gpuTemp, t?.GpuC, _s.Settings.GpuTempWarnC);
 
-        ResourceSnapshot? r = _resources.Latest;
+        HeatSlowdownSnapshot? h = _s.Heat.Latest;
+        string clock = t?.CpuClockMhz is double mhz ? $" · CPU running at {mhz / 1000:0.0} GHz" : "";
+        if (h?.CpuSlowingNow == true || h?.GpuSlowingNow == true)
+        {
+            string part = h.CpuSlowingNow && h.GpuSlowingNow ? "CPU and GPU are" : h.CpuSlowingNow ? "CPU is" : "GPU is";
+            _heatLine.Text = $"🔥 {part} slowing down from heat right now{clock}";
+            _heatLine.ForeColor = Ui.Red;
+        }
+        else if (h?.GpuPowerBrakeNow == true)
+        {
+            _heatLine.Text = "⚡ GPU is being held back by the power limit (check the charger)";
+            _heatLine.ForeColor = Ui.Amber;
+        }
+        else
+        {
+            _heatLine.Text = $"✔ No heat slowdown{clock}";
+            _heatLine.ForeColor = Ui.Green;
+        }
+
+        ResourceSnapshot? r = _s.Resources.Latest;
         if (r != null)
         {
             _cpuLoad.Text = $"{r.CpuPercent:0}%";
             _ram.Text = $"{r.RamPercent}%";
+            _ram.ForeColor = r.RamPercent >= _s.Settings.RamPercentWarn ? Ui.Red : r.RamPercent >= 80 ? Ui.Amber : SystemColors.ControlText;
             _tooltip.SetToolTip(_ram, $"{Format.Bytes(r.RamUsedBytes)} of {Format.Bytes(r.RamTotalBytes)}");
 
+            string? selected = _apps.SelectedItems.Count > 0 ? _apps.SelectedItems[0].Text : null;
             _apps.BeginUpdate();
             _apps.Items.Clear();
             foreach (AppUsage app in r.TopApps)
             {
-                _apps.Items.Add(new ListViewItem(
-                [
-                    app.Name,
-                    $"{app.CpuPercent:0.0}%",
-                    Format.Bytes(app.MemoryBytes),
-                    app.ProcessCount.ToString(),
-                ]));
+                var item = new ListViewItem([app.Name, $"{app.CpuPercent:0.0}%", Format.Bytes(app.MemoryBytes), app.ProcessCount.ToString()]);
+                _apps.Items.Add(item);
+                if (app.Name == selected) item.Selected = true;
             }
             _apps.EndUpdate();
         }
 
-        string scan = _settings.ScanForSuspiciousProcesses
-            ? $"Suspicious-process scan: on, {_scanner.FlaggedCount} flagged this session."
-            : "Suspicious-process scan: off.";
-        string key = CredentialStore.HasApiKey ? "API key: stored (AI features coming in v2)." : "API key: not set.";
-        _footer.Text = _temps.Problem == null ? $"{scan}\n{key}" : $"{_temps.Problem}\n{scan}\n{key}";
+        _footer.Text = string.Join("\n", FooterLines());
     }
+
+    private IEnumerable<string> FooterLines()
+    {
+        if (_s.Temps.Problem != null) yield return _s.Temps.Problem;
+
+        HeatSlowdownSnapshot? h = _s.Heat.Latest;
+        if (h != null)
+        {
+            string gpu = h.GpuReasonsAvailable ? Minutes(h.GpuToday) : "n/a";
+            yield return $"Heat slowdowns today: CPU {Minutes(h.CpuToday)} · GPU {gpu}";
+        }
+
+        DefenderStatus? d = _s.Defender.Latest;
+        if (d != null)
+        {
+            yield return !d.Readable ? "Defender: couldn't read status."
+                : d.OtherAntivirus != null ? $"Antivirus: {d.OtherAntivirus} is in charge."
+                : d.RealTimeOn ? $"Defender: on{(d.Exclusions.Count > 0 ? $" ({d.Exclusions.Count} scan exclusion{(d.Exclusions.Count == 1 ? "" : "s")})" : "")}."
+                : "Defender: real-time protection is OFF!";
+        }
+
+        if (_s.Disk.FreeBytes is long free) yield return $"Free space on C: {Format.Bytes(free)}";
+
+        if (_s.Games.InSession) yield return "🎮 Game running: alerts are held until you finish.";
+        else if (_s.Games.LastReport is { } g) yield return $"Last game: {g.Game}, {(int)g.Length.TotalMinutes} min, peak CPU {Format.Temp(g.PeakCpuC)} / GPU {Format.Temp(g.PeakGpuC)}";
+
+        yield return _s.Settings.ScanForSuspiciousProcesses
+            ? $"Suspicious-program check: on, {_s.Scanner.FlaggedCount} flagged this session."
+            : "Suspicious-program check: off.";
+
+        var usage = AiClient.CurrentUsage();
+        yield return _s.Ai.HasKey
+            ? $"AI: on · ${usage.SpentUsd:0.00} of ${_s.Settings.AiMonthlyBudgetUsd:0.00} used this month"
+            : "AI: no API key yet (tray menu > Set API key…)";
+    }
+
+    private static string Minutes(TimeSpan t) => t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds}s" : $"{t.Seconds}s";
 
     private static void SetTemp(Label label, double? celsius, double warnAt)
     {
@@ -141,8 +220,8 @@ internal sealed class StatusForm : Form
         label.ForeColor = celsius switch
         {
             null => SystemColors.GrayText,
-            var c when c >= warnAt => Color.FromArgb(220, 38, 38),
-            var c when c >= warnAt - 10 => Color.FromArgb(217, 119, 6),
+            var c when c >= warnAt => Ui.Red,
+            var c when c >= warnAt - 10 => Ui.Amber,
             _ => SystemColors.ControlText,
         };
     }

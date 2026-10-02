@@ -14,19 +14,13 @@ public sealed record SuspiciousProcess(int Pid, string Name, string ExePath, IRe
 public sealed class SuspiciousProcessScanner(Settings settings)
 {
     // Real Windows processes that malware likes to impersonate. All of them live under C:\Windows.
-    private static readonly string[] SystemNames =
+    internal static readonly string[] SystemNames =
     [
         "svchost", "lsass", "csrss", "winlogon", "services", "smss", "wininit", "explorer", "spoolsv",
         "taskhostw", "dwm", "conhost", "rundll32", "dllhost", "sihost", "ctfmon", "runtimebroker", "searchhost",
     ];
 
-    private static readonly string WindowsDir =
-        Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd('\\') + "\\";
-
-    private static readonly (string Folder, string Label)[] RiskyFolders = BuildRiskyFolders();
-
     private readonly Dictionary<int, string> _seen = [];               // pid -> exe path already evaluated
-    private readonly Dictionary<string, bool> _signatureCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _allowed = new(settings.AllowedExePaths, StringComparer.OrdinalIgnoreCase);
     private readonly object _allowedGate = new();
     private readonly HashSet<string> _alreadyReported = new(StringComparer.OrdinalIgnoreCase); // exe paths
@@ -96,7 +90,7 @@ public sealed class SuspiciousProcessScanner(Settings settings)
     {
         var reasons = new List<string>();
         string name = Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
-        bool inWindowsFolder = path.StartsWith(WindowsDir, StringComparison.OrdinalIgnoreCase);
+        bool inWindowsFolder = path.StartsWith(FileTrust.WindowsDir, StringComparison.OrdinalIgnoreCase);
 
         // Strong signal 1: real system name, wrong place.
         if (SystemNames.Contains(name) && !inWindowsFolder)
@@ -111,36 +105,17 @@ public sealed class SuspiciousProcessScanner(Settings settings)
         }
 
         // Weaker signal: an unsigned program running from a throwaway folder. Needs both parts.
-        string? riskyFolder = RiskyFolders
-            .Where(f => path.StartsWith(f.Folder, StringComparison.OrdinalIgnoreCase))
-            .Select(f => f.Label)
-            .FirstOrDefault();
-        if (riskyFolder != null && !IsSigned(path))
+        string? riskyFolder = FileTrust.RiskyFolderLabel(path);
+        if (riskyFolder != null && !FileTrust.IsSigned(path))
         {
             reasons.Add($"It runs from {riskyFolder} and has no valid digital signature.");
         }
-        else if (reasons.Count > 0 && !IsSigned(path))
+        else if (reasons.Count > 0 && !FileTrust.IsSigned(path))
         {
             reasons.Add("It has no valid digital signature.");
         }
 
         return reasons;
-    }
-
-    private bool IsSigned(string path)
-    {
-        if (_signatureCache.TryGetValue(path, out bool cached)) return cached;
-        bool signed;
-        try
-        {
-            signed = NativeMethods.HasValidEmbeddedSignature(path);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"Signature check failed for {path}", ex);
-            signed = true; // unknown -> don't accuse it
-        }
-        return _signatureCache[path] = signed;
     }
 
     private void ScanStartupEntries()
@@ -189,20 +164,6 @@ public sealed class SuspiciousProcessScanner(Settings settings)
             }
         }
         return entries;
-    }
-
-    private static (string, string)[] BuildRiskyFolders()
-    {
-        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string Dir(string p) => p.TrimEnd('\\') + "\\";
-        return
-        [
-            (Dir(NativeMethods.ToLongPath(Path.GetTempPath())), "your Temp folder"),
-            (Dir(Path.Combine(WindowsDir, "Temp")), "the Windows Temp folder"),
-            (Dir(Path.Combine(profile, "Downloads")), "your Downloads folder"),
-            (Dir(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public"), "the Public user folder"),
-            (Dir(Path.Combine(Path.GetPathRoot(WindowsDir)!, "$Recycle.Bin")), "the Recycle Bin"),
-        ];
     }
 
     private static int Levenshtein(string a, string b)

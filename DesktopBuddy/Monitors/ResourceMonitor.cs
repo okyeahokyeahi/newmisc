@@ -11,7 +11,8 @@ public sealed record ResourceSnapshot(
     uint RamPercent,
     ulong RamUsedBytes,
     ulong RamTotalBytes,
-    IReadOnlyList<AppUsage> TopApps);
+    IReadOnlyList<AppUsage> TopApps,
+    IReadOnlyList<AppUsage> AllApps);
 
 /// <summary>Samples per-app CPU and RAM and raises an alert when an app stays heavy for a while.</summary>
 public sealed class ResourceMonitor(Settings settings)
@@ -86,7 +87,8 @@ public sealed class ResourceMonitor(Settings settings)
             memoryStatus.dwMemoryLoad,
             memoryStatus.ullTotalPhys - memoryStatus.ullAvailPhys,
             memoryStatus.ullTotalPhys,
-            top);
+            top,
+            usage);
 
         if (capacityMs > 0)
         {

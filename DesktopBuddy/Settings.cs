@@ -35,6 +35,35 @@ public sealed class Settings
     public bool ScanForSuspiciousProcesses { get; set; } = true;
     public int ScanIntervalSeconds { get; set; } = 20;
     public bool WatchStartupEntries { get; set; } = true;
+    public bool WatchDefender { get; set; } = true;
+    /// <summary>Scheduled tasks, services, Startup folder, Winlogon.</summary>
+    public bool WatchHiddenStartup { get; set; } = true;
+    public bool WatchDownloads { get; set; } = true;
+
+    // --- Heat slowdown (throttling) ---
+    /// <summary>How long the CPU/GPU must keep slowing down from heat before you get an alert.</summary>
+    public int HeatSlowdownAlertSeconds { get; set; } = 30;
+
+    // --- Hidden miner / idle hog check ---
+    public int IdleMinutes { get; set; } = 5;
+    public double IdleGpuPercent { get; set; } = 30;
+    public double IdleCpuPercent { get; set; } = 40;
+
+    // --- Disk ---
+    public int DiskFreeWarnGb { get; set; } = 20;
+
+    // --- Games (popups wait and you get a report afterwards) ---
+    public List<string> GameProcessNames { get; set; } =
+    [
+        "RobloxPlayerBeta", "Minecraft.Windows", "FortniteClient-Win64-Shipping", "VALORANT-Win64-Shipping",
+        "cs2", "GTA5", "GTA5_Enhanced", "r5apex", "r5apex_dx12", "RocketLeague",
+    ];
+
+    // --- AI (only used once you add an API key) ---
+    public string AiModel { get; set; } = "claude-opus-5-5";
+    public double AiMonthlyBudgetUsd { get; set; } = 2.00;
+    public int AiMaxCallsPerDay { get; set; } = 100;
+
     /// <summary>Full exe paths you clicked "Always allow" on.</summary>
     public List<string> AllowedExePaths { get; set; } = [];
 
