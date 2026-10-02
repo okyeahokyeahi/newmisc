@@ -11,7 +11,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Lets the project build on non-Windows machines (CI, Linux dev boxes). -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

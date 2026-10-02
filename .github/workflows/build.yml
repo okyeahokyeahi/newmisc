@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: windows-latest
     env:
-      VERSION: 1.1.${{ github.run_number }}
+      VERSION: 1.2.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
