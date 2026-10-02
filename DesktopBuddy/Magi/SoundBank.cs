@@ -20,7 +20,7 @@ internal sealed class SoundBank : IDisposable
     private readonly Func<bool> _quiet; // e.g. a game is running
     private readonly List<WaveOutEvent> _playing = [];
     private const int LatencyMs = 300; // WaveOutEvent's default buffering
-    private readonly Dictionary<string, float> _gainCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (float Gain, TimeSpan LeadIn)> _levelCache = new(StringComparer.OrdinalIgnoreCase);
 
     public SoundBank(Settings settings, Func<bool> quiet)
     {
@@ -83,8 +83,10 @@ internal sealed class SoundBank : IDisposable
     {
         if (CustomFile(cue) is string file)
         {
+            var (gain, leadIn) = LevelFor(file);
             var reader = new AudioFileReader(file);
-            ISampleProvider p = new VolumeSampleProvider(reader) { Volume = LevelFor(file) };
+            if (leadIn > TimeSpan.Zero) reader.CurrentTime = leadIn; // skip silence before the sound starts
+            ISampleProvider p = new VolumeSampleProvider(reader) { Volume = gain };
             if (loop) p = new LoopingProvider(reader, p);
             return (new TimeLimit(p, TimeSpan.FromSeconds(loop ? 30 : 10)), reader); // never a whole long file
         }
@@ -94,18 +96,23 @@ internal sealed class SoundBank : IDisposable
 
     /// <summary>
     /// Levels a file by its average loudness (RMS over the part that plays, up to 30 s) to match the
-    /// built-in sounds, capped so its loudest moment can't clip. Cached per file version.
+    /// built-in sounds, capped so its loudest moment can't clip, and finds any silence at the start
+    /// (so a chime plays the instant a core votes). Cached per file version.
     /// </summary>
-    private float LevelFor(string file)
+    private (float Gain, TimeSpan LeadIn) LevelFor(string file)
     {
         string key = $"{file}|{File.GetLastWriteTimeUtc(file).Ticks}";
-        if (!_gainCache.TryGetValue(key, out float gain))
+        if (!_levelCache.TryGetValue(key, out var level))
         {
+            var samples = new List<float>();
             double sumSquares = 0;
             long count = 0;
             float peak = 0;
+            int channels = 1, sampleRate = 44100;
             using (var reader = new AudioFileReader(file))
             {
+                channels = reader.WaveFormat.Channels;
+                sampleRate = reader.WaveFormat.SampleRate;
                 var buffer = new float[reader.WaveFormat.SampleRate * reader.WaveFormat.Channels];
                 long limit = (long)buffer.Length * 30;
                 int read;
@@ -116,20 +123,28 @@ internal sealed class SoundBank : IDisposable
                         float v = Math.Abs(buffer[i]);
                         peak = Math.Max(peak, v);
                         sumSquares += v * v;
+                        if (samples.Count < sampleRate * channels) samples.Add(v); // first second, for the lead-in
                     }
                     count += read;
                 }
             }
+
+            // Lead-in: everything before the first sample above 5% of the peak (capped at 0.5 s).
+            int firstLoud = samples.FindIndex(v => v > peak * 0.05f);
+            TimeSpan leadIn = firstLoud > 0
+                ? TimeSpan.FromSeconds(Math.Min(0.5, Math.Max(0, firstLoud / channels - sampleRate / 500) / (double)sampleRate)) // keep 2 ms
+                : TimeSpan.Zero;
             double rms = count > 0 ? Math.Sqrt(sumSquares / count) : 0;
             const double TargetRms = 0.1;   // about -20 dBFS, similar to the built-in cues
             const double MaxPeak = 0.95;
             double g = rms > 1e-5 ? TargetRms / rms : 1;
             if (peak > 0) g = Math.Min(g, MaxPeak / peak); // never clip
-            gain = (float)Math.Clamp(g, 0.1, 40);
-            _gainCache[key] = gain;
-            Log.Info($"Sound {Path.GetFileName(file)}: rms {20 * Math.Log10(Math.Max(rms, 1e-9)):0.0} dB, peak {20 * Math.Log10(Math.Max(peak, 1e-9)):0.0} dB, gain x{gain:0.0}");
+            level = ((float)Math.Clamp(g, 0.1, 40), leadIn);
+            _levelCache[key] = level;
+            Log.Info($"Sound {Path.GetFileName(file)}: rms {20 * Math.Log10(Math.Max(rms, 1e-9)):0.0} dB, peak {20 * Math.Log10(Math.Max(peak, 1e-9)):0.0} dB, " +
+                     $"gain x{level.Gain:0.0}, skips {leadIn.TotalMilliseconds:0} ms of silence");
         }
-        return gain * (float)Math.Clamp(_settings.MagiVolume, 0, 1.5);
+        return (level.Gain * (float)Math.Clamp(_settings.MagiVolume, 0, 1.5), level.LeadIn);
     }
 
     private WaveOutEvent Start(ISampleProvider provider, IDisposable? owned)
