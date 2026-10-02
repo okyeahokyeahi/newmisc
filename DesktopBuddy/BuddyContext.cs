@@ -23,6 +23,7 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly RefreshRateMonitor _refreshRate = new();
     private readonly RestartMonitor _restart;
     private readonly ReminderStore _reminders = new();
+    private readonly LaptopCareMonitor _care = new();
     private Hotkey? _hotkey;
     private QuickPanel? _quickPanel;
     private DateTime _quickPanelClosedAt;
@@ -79,6 +80,7 @@ internal sealed class BuddyContext : ApplicationContext
             Defender = _defender,
             Disk = _disk,
             Games = _games,
+            Care = _care,
             Ai = new AiClient(settings),
             ShowDiagnosis = ShowDiagnosis,
             ShowAsk = ShowAsk,
@@ -104,6 +106,8 @@ internal sealed class BuddyContext : ApplicationContext
         _games.SessionEnded += report => OnUi(() => OnGameEnded(report));
         _games.SessionStarted += _ => OnUi(OnGameStarted);
         _games.GameStopped += () => OnUi(OnGameStopped);
+        _care.Tip += tip => OnUi(() => Notify(tip.Title, tip.Message, ToolTipIcon.Info,
+            onClick: tip.Url == null ? () => OpenUri("ms-settings:startupapps") : () => OpenAsUser(tip.Url)));
         _restart.Remind += days => OnUi(() => Notify("Windows wants to restart",
             $"An update has been waiting {days} days. Restarting finishes it (and often fixes driver hiccups). Click to restart when you're ready.",
             ToolTipIcon.Info, onClick: ConfirmRestart));
@@ -201,7 +205,8 @@ internal sealed class BuddyContext : ApplicationContext
     private async Task MonitorLoop(CancellationToken token)
     {
         _temps.Open();
-        DateTime nextScan = DateTime.MinValue, nextSlow = DateTime.MinValue, nextDisk = DateTime.MinValue;
+        DateTime nextScan = DateTime.MinValue, nextSlow = DateTime.MinValue, nextDisk = DateTime.MinValue,
+                 nextCare = DateTime.UtcNow.AddMinutes(10); // not during the busy first minutes after boot
 
         while (!token.IsCancellationRequested)
         {
@@ -224,6 +229,11 @@ internal sealed class BuddyContext : ApplicationContext
                 if (_settings.WatchHiddenStartup) Safe("hidden startup watcher", _hiddenStartup.Tick);
                 Safe("restart monitor", _restart.Tick);
                 nextSlow = now.AddSeconds(60);
+            }
+            if (now >= nextCare)
+            {
+                Safe("laptop care", _care.Tick);
+                nextCare = now.AddHours(1);
             }
             if (now >= nextDisk)
             {
@@ -711,6 +721,19 @@ internal sealed class BuddyContext : ApplicationContext
             case StartupPlace.Service: OpenFile("mmc.exe", "services.msc"); break;
             case StartupPlace.StartupFolder: OpenFile("explorer.exe", Environment.GetFolderPath(Environment.SpecialFolder.Startup)); break;
             default: OpenUri("windowsdefender://threat"); break;
+        }
+    }
+
+    /// <summary>Opens a web page in the normal (non-admin) browser via Explorer.</summary>
+    private static void OpenAsUser(string url)
+    {
+        try
+        {
+            Process.Start("explorer.exe", $"\"{url}\"");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Opening {url} failed", ex);
         }
     }
 

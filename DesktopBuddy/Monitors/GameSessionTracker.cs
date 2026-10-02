@@ -158,9 +158,9 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
             string file = Path.Combine(Settings.Folder, "game-sessions.csv");
             if (!File.Exists(file))
                 File.WriteAllText(file, "started,game,minutes,peak_cpu_c,peak_gpu_c,peak_ram_pct,cpu_heat_slowdown_s,gpu_heat_slowdown_s\n");
-            File.AppendAllText(file,
+            File.AppendAllText(file, string.Create(System.Globalization.CultureInfo.InvariantCulture,
                 $"{r.Started:yyyy-MM-dd HH:mm},{r.Game.Replace(',', ' ')},{r.Length.TotalMinutes:0},{r.PeakCpuC:0},{r.PeakGpuC:0}," +
-                $"{r.PeakRamPercent},{r.CpuHeatSlowdown.TotalSeconds:0},{r.GpuHeatSlowdown.TotalSeconds:0}\n");
+                $"{r.PeakRamPercent},{r.CpuHeatSlowdown.TotalSeconds:0},{r.GpuHeatSlowdown.TotalSeconds:0}\n")); // invariant: the laptop-care check reads it back
         }
         catch (Exception ex)
         {

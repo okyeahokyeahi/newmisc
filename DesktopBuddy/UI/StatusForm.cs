@@ -199,7 +199,8 @@ internal sealed class StatusForm : Form
                 : "Defender: real-time protection is OFF!";
         }
 
-        if (_s.Disk.FreeBytes is long free) yield return $"Free space on C: {Format.Bytes(free)}";
+        if (_s.Disk.FreeBytes is long free) yield return $"Free space on C: {Format.Bytes(free)}" +
+            (_s.Care.BootTimes is var (last, usual) ? $" · last startup {last.TotalSeconds:0}s (usually {usual.TotalSeconds:0}s)" : "");
 
         if (_s.Games.InSession) yield return "🎮 Game running: alerts are held until you finish.";
         else if (_s.Games.LastReport is { } g) yield return $"Last game: {g.Game}, {(int)g.Length.TotalMinutes} min, peak CPU {Format.Temp(g.PeakCpuC)} / GPU {Format.Temp(g.PeakGpuC)}";

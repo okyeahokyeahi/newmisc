@@ -14,6 +14,7 @@ internal sealed class BuddyServices
     public required DefenderMonitor Defender { get; init; }
     public required DiskMonitor Disk { get; init; }
     public required GameSessionTracker Games { get; init; }
+    public required LaptopCareMonitor Care { get; init; }
     public required AiClient Ai { get; init; }
 
     public required Action ShowDiagnosis { get; init; }
