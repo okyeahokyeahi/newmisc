@@ -424,15 +424,35 @@ internal sealed class BuddyContext : ApplicationContext
     // ---------- MAGI theme ----------
     private MagiForm CreateMagiForm(MagiCase vote)
     {
-        Task<IReadOnlyDictionary<Core, string>?>? voices =
-            _settings.MagiAiVoices && _services.Ai.HasKey ? MagiVoices.Ask(_services.Ai, vote) : null;
-        return new MagiForm(vote, _sounds, voices);
+        CancellationTokenSource? cancel = null;
+        Task<IReadOnlyDictionary<Core, string>?>? voices = null;
+        if (_settings.MagiAiVoices && _services.Ai.HasKey)
+        {
+            cancel = new CancellationTokenSource();
+            voices = MagiVoices.Ask(_services.Ai, vote, cancel.Token);
+        }
+        return new MagiForm(vote, _sounds, voices, cancel);
     }
+
+    // One MAGI screen at a time; later votes wait their turn.
+    private readonly Queue<MagiCase> _magiQueue = new();
+    private bool _magiOpen;
 
     private void ShowMagi(MagiCase vote)
     {
+        if (_magiOpen || _suspiciousDialogOpen)
+        {
+            if (_magiQueue.Count < 5) _magiQueue.Enqueue(vote);
+            return;
+        }
+        _magiOpen = true;
         MagiForm form = CreateMagiForm(vote);
-        form.FormClosed += (_, _) => form.Dispose();
+        form.FormClosed += (_, _) =>
+        {
+            form.Dispose();
+            _magiOpen = false;
+            if (_magiQueue.Count > 0) _ui.Post(_ => ShowMagi(_magiQueue.Dequeue()), null);
+        };
         form.Show();
         form.Activate();
     }
@@ -465,7 +485,7 @@ internal sealed class BuddyContext : ApplicationContext
         root.DropDownItems.Add(new ToolStripSeparator());
         root.DropDownItems.Add(sounds);
         root.DropDownItems.Add(voices);
-        root.DropDownItems.Add("Run a MAGI test vote", null, (_, _) => ShowMagi(MagiCases.Test(() => { })));
+        root.DropDownItems.Add("Run a MAGI test vote", null, (_, _) => { if (!_magiOpen) ShowMagi(MagiCases.Test(() => { })); });
         root.DropDownItems.Add("Open sounds folder (add your own)", null, (_, _) => OpenFile("explorer.exe", SoundBank.Folder));
         return root;
     }
@@ -494,9 +514,14 @@ internal sealed class BuddyContext : ApplicationContext
     {
         try
         {
+            // AllDialogs: Windows asks to confirm and warns if the file is too big for the Recycle Bin.
             Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path,
-                Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                Microsoft.VisualBasic.FileIO.UIOption.AllDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
             Notify("Moved to Recycle Bin", $"{Path.GetFileName(path)} is in the Recycle Bin.", ToolTipIcon.Info, critical: true);
+        }
+        catch (OperationCanceledException)
+        {
+            // you clicked No
         }
         catch (Exception ex)
         {
@@ -659,7 +684,7 @@ internal sealed class BuddyContext : ApplicationContext
         {
             MagiCase vote = MagiCases.Download(report,
                 scan: () => _ = ScanDownload(report.FilePath),
-                showFile: () => OpenFile("explorer.exe", "/select,\"" + report.FilePath + "\""),
+                showFile: () => Process.Start("explorer.exe", $"/select,\"{report.FilePath}\""),
                 recycle: () => RecycleFile(report.FilePath));
             if (_games.InSession || NativeMethods.UserIsBusy())
                 Notify("CASPER·3 · SECURITY ALERT", $"{report.FileName}: vote requested. Click to open the MAGI panel.",
@@ -705,7 +730,7 @@ internal sealed class BuddyContext : ApplicationContext
     /// </summary>
     private void ShowNextSuspicious()
     {
-        if (_suspiciousDialogOpen || Paused || _games.InSession || NativeMethods.UserIsBusy()) return;
+        if (_suspiciousDialogOpen || _magiOpen || Paused || _games.InSession || NativeMethods.UserIsBusy()) return;
 
         while (_pendingSuspicious.Count > 0)
         {
@@ -731,9 +756,7 @@ internal sealed class BuddyContext : ApplicationContext
                         explain: () =>
                         {
                             using var explainForm = new ExplainForm(_services, appName, item.ExePath, item.Reasons);
-                            explainForm.ShowDialog();
-                            _pendingSuspicious.Enqueue(item); // ask again after reading
-                            _scanner.ForgetReport(item.ExePath);
+                            explainForm.ShowDialog(); // the MAGI screen stays open behind it
                         },
                         allow: () => magiChoice = SuspiciousChoice.AlwaysAllow,
                         ignore: () => magiChoice = SuspiciousChoice.Ignore);

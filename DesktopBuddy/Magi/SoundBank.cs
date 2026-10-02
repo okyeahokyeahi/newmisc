@@ -13,12 +13,13 @@ public enum Cue { Deciding, Approve, Deny, Resolve, Alarm, Tick }
 internal sealed class SoundBank : IDisposable
 {
     public static string Folder { get; } = Path.Combine(Settings.Folder, "sounds");
-    private static readonly string[] Extensions = [".wav", ".mp3"];
+    private static readonly string[] Extensions = [".wav", ".mp3", ".aiff", ".aif"];
     private const int SampleRate = 44100;
 
     private readonly Settings _settings;
     private readonly Func<bool> _quiet; // e.g. a game is running
     private readonly List<WaveOutEvent> _playing = [];
+    private const int LatencyMs = 300; // WaveOutEvent's default buffering
     private readonly Dictionary<string, float> _gainCache = new(StringComparer.OrdinalIgnoreCase);
 
     public SoundBank(Settings settings, Func<bool> quiet)
@@ -35,7 +36,8 @@ internal sealed class SoundBank : IDisposable
         if (!Enabled) return;
         try
         {
-            Start(Source(cue, loop: false));
+            var (provider, owned) = Source(cue, loop: false);
+            Start(provider, owned);
         }
         catch (Exception ex)
         {
@@ -49,15 +51,17 @@ internal sealed class SoundBank : IDisposable
         if (!Enabled) return _ => { };
         try
         {
-            var fader = new FadeInOutSampleProvider(Source(Cue.Deciding, loop: true));
-            WaveOutEvent output = Start(fader);
+            var (source, owned) = Source(Cue.Deciding, loop: true);
+            var fader = new FadeInOutSampleProvider(source);
+            WaveOutEvent output = Start(fader, owned);
             bool stopped = false;
             return fadeMs =>
             {
                 if (stopped) return;
                 stopped = true;
                 fader.BeginFadeOut(Math.Max(10, fadeMs));
-                Task.Delay(fadeMs + 60).ContinueWith(_ => { try { output.Stop(); } catch { /* already stopped */ } });
+                // Stop only after the buffered audio has played the whole fade.
+                Task.Delay(fadeMs + LatencyMs + 100).ContinueWith(_ => { try { output.Stop(); } catch { /* already stopped */ } });
             };
         }
         catch (Exception ex)
@@ -74,49 +78,70 @@ internal sealed class SoundBank : IDisposable
         return Extensions.Select(ext => Path.Combine(Folder, name + ext)).FirstOrDefault(File.Exists);
     }
 
-    private ISampleProvider Source(Cue cue, bool loop)
+    /// <summary>The cue's audio, plus the file reader to dispose afterwards (null for built-in sounds).</summary>
+    private (ISampleProvider Provider, IDisposable? Owned) Source(Cue cue, bool loop)
     {
         if (CustomFile(cue) is string file)
         {
             var reader = new AudioFileReader(file);
             ISampleProvider p = new VolumeSampleProvider(reader) { Volume = LevelFor(file) };
             if (loop) p = new LoopingProvider(reader, p);
-            return new TimeLimit(p, TimeSpan.FromSeconds(loop ? 30 : 10)); // never play a whole long file
+            return (new TimeLimit(p, TimeSpan.FromSeconds(loop ? 30 : 10)), reader); // never a whole long file
         }
         float[] samples = Synth(cue);
-        ISampleProvider synth = new ArrayProvider(samples, loop);
-        return new TimeLimit(synth, TimeSpan.FromSeconds(30));
+        return (new TimeLimit(new ArrayProvider(samples, loop), TimeSpan.FromSeconds(30)), null);
     }
 
-    /// <summary>Gain that brings a quiet file's peak up to a comfortable level (cached per file version).</summary>
+    /// <summary>
+    /// Levels a file by its average loudness (RMS over the part that plays, up to 30 s) to match the
+    /// built-in sounds, capped so its loudest moment can't clip. Cached per file version.
+    /// </summary>
     private float LevelFor(string file)
     {
         string key = $"{file}|{File.GetLastWriteTimeUtc(file).Ticks}";
-        if (_gainCache.TryGetValue(key, out float cached)) return cached;
-        float peak = 0;
-        using (var reader = new AudioFileReader(file))
+        if (!_gainCache.TryGetValue(key, out float gain))
         {
-            var buffer = new float[reader.WaveFormat.SampleRate * reader.WaveFormat.Channels];
-            int total = 0, read, limit = buffer.Length * 10; // first ~10 s
-            while (total < limit && (read = reader.Read(buffer, 0, buffer.Length)) > 0)
+            double sumSquares = 0;
+            long count = 0;
+            float peak = 0;
+            using (var reader = new AudioFileReader(file))
             {
-                for (int i = 0; i < read; i++) peak = Math.Max(peak, Math.Abs(buffer[i]));
-                total += read;
+                var buffer = new float[reader.WaveFormat.SampleRate * reader.WaveFormat.Channels];
+                long limit = (long)buffer.Length * 30;
+                int read;
+                while (count < limit && (read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    for (int i = 0; i < read; i++)
+                    {
+                        float v = Math.Abs(buffer[i]);
+                        peak = Math.Max(peak, v);
+                        sumSquares += v * v;
+                    }
+                    count += read;
+                }
             }
+            double rms = count > 0 ? Math.Sqrt(sumSquares / count) : 0;
+            const double TargetRms = 0.1;   // about -20 dBFS, similar to the built-in cues
+            const double MaxPeak = 0.95;
+            double g = rms > 1e-5 ? TargetRms / rms : 1;
+            if (peak > 0) g = Math.Min(g, MaxPeak / peak); // never clip
+            gain = (float)Math.Clamp(g, 0.1, 40);
+            _gainCache[key] = gain;
+            Log.Info($"Sound {Path.GetFileName(file)}: rms {20 * Math.Log10(Math.Max(rms, 1e-9)):0.0} dB, peak {20 * Math.Log10(Math.Max(peak, 1e-9)):0.0} dB, gain x{gain:0.0}");
         }
-        float gain = peak > 0.0001f ? Math.Clamp(0.7f / peak, 0.3f, 10f) : 1f;
-        return _gainCache[key] = gain * (float)Math.Clamp(_settings.MagiVolume, 0, 1.5);
+        return gain * (float)Math.Clamp(_settings.MagiVolume, 0, 1.5);
     }
 
-    private WaveOutEvent Start(ISampleProvider provider)
+    private WaveOutEvent Start(ISampleProvider provider, IDisposable? owned)
     {
-        var output = new WaveOutEvent();
+        var output = new WaveOutEvent { DesiredLatency = LatencyMs };
         output.Init(provider);
         lock (_playing) _playing.Add(output);
         output.PlaybackStopped += (_, _) =>
         {
             lock (_playing) _playing.Remove(output);
             output.Dispose();
+            owned?.Dispose(); // release the file so you can replace it while the app runs
         };
         output.Play();
         return output;
@@ -175,7 +200,7 @@ internal sealed class SoundBank : IDisposable
             File.WriteAllText(readme,
                 "Desktop Buddy MAGI theme sounds\r\n" +
                 "================================\r\n\r\n" +
-                "Put your own .wav or .mp3 files here to replace the built-in sounds:\r\n\r\n" +
+                "Put your own .wav, .mp3 or .aiff files here to replace the built-in sounds:\r\n\r\n" +
                 "  deciding.wav  plays while the three cores decide (loops if short, fades out at the verdict)\r\n" +
                 "  approve.wav   a core votes APPROVE\r\n" +
                 "  deny.wav      a core votes DENY\r\n" +
@@ -235,16 +260,17 @@ internal sealed class SoundBank : IDisposable
 
         public int Read(float[] buffer, int offset, int count)
         {
-            int written = 0;
+            int written = 0, emptyReads = 0;
             while (written < count)
             {
                 int n = inner.Read(buffer, offset + written, count - written);
                 if (n == 0)
                 {
-                    if (reader.Length == 0) break;
+                    if (reader.Length == 0 || ++emptyReads > 1) break; // unreadable file: don't spin
                     reader.Position = 0;
                     continue;
                 }
+                emptyReads = 0;
                 written += n;
             }
             return written;

@@ -6,7 +6,7 @@ public enum Core { Melchior, Balthasar, Casper }
 public sealed record CoreVote(bool Approve, string Fact);
 
 /// <summary>A button under the verdict. The recommended action is Primary.</summary>
-public sealed record MagiAction(string Label, Action Run, bool Primary = false);
+public sealed record MagiAction(string Label, Action Run, bool Primary = false, bool KeepOpen = false);
 
 /// <summary>A decision put to the three cores. The votes are rule-based; the AI only gives them a voice.</summary>
 public sealed class MagiCase

@@ -16,7 +16,10 @@ internal static class MagiCases
     private static readonly string[] FileHosts =
         ["mediafire", "mega.nz", "mega.io", "anonfiles", "gofile", "pixeldrain", "workupload", "sendspace", "dropbox", "discordapp", "cdn.discord", "4shared", "zippyshare"];
 
-    private static readonly string[] LureWords = ["executor", "exploit", "cheat", "hack", "inject", "free robux", "robux", "aimbot", "crack", "keygen", "unlocker", "bypass"];
+    // Matched as whole words in the file name (so "hackathon" or "cheatsheet" don't count).
+    private static readonly HashSet<string> LureWords = new(StringComparer.OrdinalIgnoreCase)
+        { "executor", "exploit", "exploits", "cheat", "cheats", "hack", "hacks", "hacked", "injector", "inject", "robux",
+          "freerobux", "aimbot", "crack", "cracked", "keygen", "bypass", "krnl", "solara", "fluxus" };
 
     // ---------- Suspicious program ----------
     public static MagiCase Suspicious(SuspiciousProcess item, AppUsage? usage, bool hasWindow,
@@ -57,7 +60,7 @@ internal static class MagiCases
             Actions =
             [
                 new MagiAction("Terminate", terminate, Primary: casper.Approve && melchior.Approve || casper.Approve && balthasar.Approve || melchior.Approve && balthasar.Approve),
-                new MagiAction("What is this?", explain),
+                new MagiAction("What is this?", explain, KeepOpen: true),
                 new MagiAction("Always allow", allow),
                 new MagiAction("Ignore", ignore),
             ],
@@ -68,18 +71,24 @@ internal static class MagiCases
     public static MagiCase Download(DownloadReport report, Action scan, Action showFile, Action recycle)
     {
         string name = report.FileName.ToLowerInvariant();
-        bool lure = LureWords.Any(w => name.Contains(w.Replace(" ", ""), StringComparison.Ordinal) || name.Contains(w, StringComparison.Ordinal));
+        var words = System.Text.RegularExpressions.Regex.Split(Path.GetFileNameWithoutExtension(name), "[^a-z0-9]+");
+        bool lure = words.Any(LureWords.Contains) || name.Replace(" ", "").Contains("freerobux", StringComparison.Ordinal);
         string? fromFileHost = FileHosts.FirstOrDefault(h => (report.FromHost ?? "").Contains(h, StringComparison.OrdinalIgnoreCase));
         bool passwordProtected = report.Warnings.Any(w => w.Contains("Password", StringComparison.OrdinalIgnoreCase));
         bool huge = report.Warnings.Any(w => w.Contains("huge", StringComparison.OrdinalIgnoreCase));
         bool unsigned = report.Warnings.Any(w => w.Contains("signed", StringComparison.OrdinalIgnoreCase));
+        bool disguised = report.Warnings.Any(w => w.Contains("Fake extension", StringComparison.OrdinalIgnoreCase) ||
+                                                  w.Contains("damaged or disguised", StringComparison.OrdinalIgnoreCase));
+        bool script = report.Warnings.Any(w => w.Contains("run commands", StringComparison.OrdinalIgnoreCase));
 
         // The question is "allow opening it?", so APPROVE = fine to open.
         var casper = new CoreVote(report.Warnings.Count == 0,
             report.Warnings.FirstOrDefault() ?? "No red flags in the file itself.");
-        var melchior = new CoreVote(!huge && !passwordProtected,
+        var melchior = new CoreVote(!huge && !passwordProtected && !disguised && !script,
             huge ? "Padded to an absurd size to dodge virus scanners."
             : passwordProtected ? "Locked so antivirus can't see inside. No honest reason for that."
+            : disguised ? "The file isn't what its name says it is."
+            : script ? "A script: it runs commands the moment it's opened."
             : unsigned ? "Unsigned, but nothing structurally odd about it."
             : "Nothing odd about the file's structure.");
         var balthasar = new CoreVote(!lure && fromFileHost == null,
@@ -112,7 +121,9 @@ internal static class MagiCases
     // ---------- Restart pending ----------
     public static MagiCase Restart(int days, Action restart)
     {
-        bool studioOpen = Process.GetProcessesByName("RobloxStudioBeta").Select(p => { p.Dispose(); return true; }).Any();
+        Process[] studio = Process.GetProcessesByName("RobloxStudioBeta");
+        bool studioOpen = studio.Length > 0;
+        foreach (Process p in studio) p.Dispose();
         int hour = DateTime.Now.Hour;
         var melchior = new CoreVote(true, $"An update has waited {days} days. Restarting finishes it and reloads drivers.");
         var balthasar = new CoreVote(!studioOpen,
