@@ -412,6 +412,7 @@ internal sealed class BuddyContext : ApplicationContext
         bool throttled = report.CpuHeatSlowdown > TimeSpan.FromSeconds(10) || report.GpuHeatSlowdown > TimeSpan.FromSeconds(10);
         string text = $"{(int)report.Length.TotalMinutes} min · peak CPU {Format.Temp(report.PeakCpuC)}, GPU {Format.Temp(report.PeakGpuC)}, RAM {report.PeakRamPercent}%" +
                       (throttled ? " · slowed down from heat" : "") +
+                      (report.Network?.Spikes > 3 ? $" · {report.Network.Spikes} lag spikes" : "") +
                       (report.HeldAlerts.Count > 0 ? $" · {report.HeldAlerts.Count} alert(s) waiting" : "") +
                       ". Click for the report.";
         Notify($"Game over: {Diagnosis.FriendlyName(report.Game)}", text, throttled || report.HeldAlerts.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,

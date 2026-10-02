@@ -12,7 +12,8 @@ public sealed record GameSessionReport(
     uint PeakRamPercent,
     TimeSpan CpuHeatSlowdown,
     TimeSpan GpuHeatSlowdown,
-    IReadOnlyList<string> HeldAlerts);
+    IReadOnlyList<string> HeldAlerts,
+    NetworkSummary? Network);
 
 /// <summary>
 /// Game mode: while a game runs, popups and alerts wait. Afterwards you get a short report: how long
@@ -32,6 +33,7 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
     private readonly Dictionary<string, bool> _isGameCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _held = [];
     private readonly object _heldGate = new();
+    private readonly NetworkProbe _network = new();
     private DateTime? _start;
     private DateTime _lastSeen;
     private string _game = "";
@@ -66,6 +68,7 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
                 _cpuSlowAtStart = heat.Latest?.CpuToday ?? TimeSpan.Zero;
                 _gpuSlowAtStart = heat.Latest?.GpuToday ?? TimeSpan.Zero;
                 Log.Info($"Game session started: {game}");
+                _network.Start();
                 SessionStarted?.Invoke(game);
             }
         }
@@ -103,12 +106,14 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
             _held.Clear();
         }
 
+        NetworkSummary network = _network.Stop();
         var heatNow = heat.Latest;
         var report = new GameSessionReport(
             _game, _start.Value.ToLocalTime(), length, _peakCpu, _peakGpu, _peakRam,
             Clamp((heatNow?.CpuToday ?? TimeSpan.Zero) - _cpuSlowAtStart),
             Clamp((heatNow?.GpuToday ?? TimeSpan.Zero) - _gpuSlowAtStart),
-            held);
+            held,
+            network);
         Log.Info($"Game session ended: {_game}, {length:h\\:mm\\:ss}");
         GameStopped?.Invoke();
 

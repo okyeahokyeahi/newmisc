@@ -30,6 +30,12 @@ internal sealed class GameReportForm : Form
             (r.PeakRamPercent >= 90 ? " That's very full: close Chrome/Studio before playing for smoother frames." : ""),
             r.PeakRamPercent >= 90 ? Ui.Amber : null);
 
+        if (r.Network is { } net)
+        {
+            Ui.AppendHeading(text, "Connection");
+            Ui.AppendBody(text, net.Verdict(), net.Spikes > 3 ? Ui.Amber : null);
+        }
+
         if (r.HeldAlerts.Count > 0)
         {
             Ui.AppendHeading(text, $"Alerts held while you played ({r.HeldAlerts.Count})");
