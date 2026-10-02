@@ -21,6 +21,7 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly IdleHogWatcher _idleHogs;
     private readonly GpuChoiceWatcher _gpuChoice;
     private readonly RefreshRateMonitor _refreshRate = new();
+    private readonly RestartMonitor _restart;
     private readonly System.Windows.Forms.Timer _slowUiTimer = new() { Interval = 10 * 60_000 };
     private readonly DownloadsWatcher? _downloads;
     private readonly BuddyServices _services;
@@ -61,6 +62,7 @@ internal sealed class BuddyContext : ApplicationContext
         _games = new GameSessionTracker(settings, _resources, _temps, _heat);
         _idleHogs = new IdleHogWatcher(settings, _resources);
         _gpuChoice = new GpuChoiceWatcher(settings, _resources);
+        _restart = new RestartMonitor(_games);
 
         _services = new BuddyServices
         {
@@ -95,6 +97,9 @@ internal sealed class BuddyContext : ApplicationContext
         _games.SessionEnded += report => OnUi(() => OnGameEnded(report));
         _games.SessionStarted += _ => OnUi(OnGameStarted);
         _games.GameStopped += () => OnUi(OnGameStopped);
+        _restart.Remind += days => OnUi(() => Notify("Windows wants to restart",
+            $"An update has been waiting {days} days. Restarting finishes it (and often fixes driver hiccups). Click to restart when you're ready.",
+            ToolTipIcon.Info, onClick: ConfirmRestart));
         _idleHogs.Report += findings => OnUi(() => OnIdleHogs(findings));
         _gpuChoice.WrongChip += finding => OnUi(() => OnWrongGpu(finding));
         _gpuChoice.AutoFixed += name => OnUi(() => Notify("Graphics setting kept",
@@ -207,6 +212,7 @@ internal sealed class BuddyContext : ApplicationContext
             {
                 if (_settings.WatchDefender) Safe("Defender monitor", _defender.Tick);
                 if (_settings.WatchHiddenStartup) Safe("hidden startup watcher", _hiddenStartup.Tick);
+                Safe("restart monitor", _restart.Tick);
                 nextSlow = now.AddSeconds(60);
             }
             if (now >= nextDisk)
@@ -341,6 +347,26 @@ internal sealed class BuddyContext : ApplicationContext
                     ok ? $"{f.Name} is now at {f.BestHz} Hz." : "Set it by hand: Settings > System > Display > Advanced display > Choose a refresh rate.",
                     ok ? ToolTipIcon.Info : ToolTipIcon.Error, critical: true);
             });
+    }
+
+    private void ConfirmRestart()
+    {
+        var answer = MessageBox.Show("Restart now to finish the Windows update?\n\nSave anything you're working on first " +
+                                     "(Roblox Studio!). The PC restarts in 30 seconds.",
+            "Desktop Buddy", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer != DialogResult.Yes) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo("shutdown.exe", "/r /t 30 /c \"Desktop Buddy: restarting to finish Windows updates.\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Starting restart failed", ex);
+        }
     }
 
     // ---------- Feature handlers ----------
