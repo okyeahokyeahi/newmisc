@@ -101,6 +101,7 @@ public sealed class HiddenStartupWatcher
 
         var (exe, args) = SplitCommand(command);
         if (exe == null) return;
+        if (string.Equals(exe, Autostart.ExePath, StringComparison.OrdinalIgnoreCase)) return; // our own "Start with Windows" task
         string exeName = Path.GetFileNameWithoutExtension(exe).ToLowerInvariant();
 
         string? reason = null;

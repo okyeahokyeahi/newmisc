@@ -59,6 +59,9 @@ public sealed class Settings
         "cs2", "GTA5", "GTA5_Enhanced", "r5apex", "r5apex_dx12", "RocketLeague",
     ];
 
+    /// <summary>Start automatically when you log in (a Task Scheduler task, so no admin prompt).</summary>
+    public bool StartWithWindows { get; set; } = true;
+
     /// <summary>Check GitHub for a newer version at startup and every few hours.</summary>
     public bool CheckForUpdates { get; set; } = true;
 

@@ -107,6 +107,20 @@ internal sealed class BuddyContext : ApplicationContext
         menu.Items.Add("Ask Buddy…", null, (_, _) => ShowAsk(null));
         menu.Items.Add(_pauseItem);
         menu.Items.Add(new ToolStripSeparator());
+        var startWithWindows = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = settings.StartWithWindows };
+        startWithWindows.Click += (_, _) =>
+        {
+            settings.StartWithWindows = startWithWindows.Checked;
+            settings.Save();
+            if (settings.StartWithWindows && !Autostart.Enable())
+            {
+                startWithWindows.Checked = settings.StartWithWindows = false;
+                settings.Save();
+                Notify("Couldn't turn on Start with Windows", "Task Scheduler refused (details in the log).", ToolTipIcon.Error, critical: true);
+            }
+            else if (!settings.StartWithWindows) Autostart.Disable();
+        };
+        menu.Items.Add(startWithWindows);
         menu.Items.Add("Set API key…", null, (_, _) => _services.ShowApiKey());
         menu.Items.Add($"Check for updates (you have {Updater.CurrentVersion.ToString(3)})", null, async (_, _) => await CheckForUpdates(manual: true));
         menu.Items.Add("Edit settings (restart to apply)", null, (_, _) => OpenFile("notepad.exe", Settings.FilePath));
@@ -140,7 +154,8 @@ internal sealed class BuddyContext : ApplicationContext
             _updateTimer.Start(); // first check a minute after startup
         }
 
-        Log.Info("Desktop Buddy started");
+        Log.Info($"Desktop Buddy {Updater.CurrentVersion.ToString(3)} started");
+        _ = Task.Run(() => Autostart.Sync(settings)); // schtasks takes a moment; don't hold up the tray
         _loop = Task.Run(() => MonitorLoop(_stop.Token));
         Notify("Desktop Buddy is running", "I'm in the system tray. Double-click me for live stats.", ToolTipIcon.Info, critical: true);
     }
