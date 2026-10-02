@@ -70,6 +70,7 @@ public sealed class Settings
 
     /// <summary>Start automatically when you log in (a Task Scheduler task, so no admin prompt).</summary>
     public bool StartWithWindows { get; set; } = true;
+    public string? AutostartRegisteredPath { get; set; }
 
     /// <summary>Check GitHub for a newer version at startup and every few hours.</summary>
     public bool CheckForUpdates { get; set; } = true;
@@ -77,6 +78,10 @@ public sealed class Settings
     /// <summary>Apps "Get game-ready" ticks by default (your last choice is remembered).</summary>
     public List<string> GameReadyCloseList { get; set; } = ["chrome", "msedge", "firefox", "opera", "spotify", "ms-teams"];
     public bool ReopenBrowserAfterGame { get; set; }
+    /// <summary>Set by Get game-ready; the browser is reopened after the NEXT game only.</summary>
+    public bool ReopenBrowserPending { get; set; }
+    /// <summary>Power mode to put back if the app was closed mid-game (so Best performance doesn't stick).</summary>
+    public string? PowerModeToRestore { get; set; }
     public string? BrowserToReopen { get; set; }
     /// <summary>Switch Windows' power mode to Best performance during games, and back afterwards.</summary>
     public bool BestPerformanceDuringGames { get; set; } = true;

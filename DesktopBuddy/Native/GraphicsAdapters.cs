@@ -70,10 +70,12 @@ internal static class GraphicsAdapters
     private static extern int CreateDXGIFactory1(ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IDXGIFactory1 factory);
 
     private static IReadOnlyList<GraphicsAdapter>? _cache;
+    private static DateTime _cachedAt;
 
+    /// <summary>Cached for 10 minutes: LUIDs change when the graphics driver is reinstalled or updated.</summary>
     public static IReadOnlyList<GraphicsAdapter> List()
     {
-        if (_cache != null) return _cache;
+        if (_cache != null && DateTime.UtcNow - _cachedAt < TimeSpan.FromMinutes(10)) return _cache;
         var result = new List<GraphicsAdapter>();
         try
         {
@@ -108,7 +110,10 @@ internal static class GraphicsAdapters
             Log.Error("Listing graphics adapters failed", ex);
         }
 
-        Log.Info("Graphics chips: " + string.Join("; ", result.Select(a => $"{a.Name} (luid {a.Luid:X})")));
+        if (result.Count == 0) return result; // don't remember a failed read
+        if (_cache == null || !_cache.Select(a => a.Luid).SequenceEqual(result.Select(a => a.Luid)))
+            Log.Info("Graphics chips: " + string.Join("; ", result.Select(a => $"{a.Name} (luid {a.Luid:X})")));
+        _cachedAt = DateTime.UtcNow;
         return _cache = result;
     }
 }

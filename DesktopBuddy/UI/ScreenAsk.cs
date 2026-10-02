@@ -10,7 +10,23 @@ namespace DesktopBuddy.UI;
 /// </summary>
 internal static class ScreenAsk
 {
+    private static bool _picking;
+
     public static void Start(BuddyServices s)
+    {
+        if (_picking) return; // Ctrl+Alt+S pressed again while the picker is up
+        _picking = true;
+        try
+        {
+            StartCore(s);
+        }
+        finally
+        {
+            _picking = false;
+        }
+    }
+
+    private static void StartCore(BuddyServices s)
     {
         if (!s.Ai.HasKey)
         {
@@ -40,6 +56,7 @@ internal sealed class RegionPicker : Form
         TopMost = true;
         ShowInTaskbar = false;
         Cursor = Cursors.Cross;
+        DpiChanged += (_, e) => e.Cancel = true; // keep 1:1 pixels with the screenshot on mixed-DPI setups
         DoubleBuffered = true;
         KeyPreview = true;
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
@@ -47,7 +64,8 @@ internal sealed class RegionPicker : Form
         MouseMove += (_, e) =>
         {
             if (!_dragging) return;
-            _selection = Rectangle.FromLTRB(Math.Min(_start.X, e.X), Math.Min(_start.Y, e.Y), Math.Max(_start.X, e.X), Math.Max(_start.Y, e.Y));
+            _selection = Rectangle.Intersect(ClientRectangle, // dragging past the edge can give negative coordinates
+                Rectangle.FromLTRB(Math.Min(_start.X, e.X), Math.Min(_start.Y, e.Y), Math.Max(_start.X, e.X), Math.Max(_start.Y, e.Y)));
             Invalidate();
         };
         MouseUp += (_, _) =>
@@ -61,7 +79,7 @@ internal sealed class RegionPicker : Form
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        e.Graphics.DrawImage(_screen, 0, 0);
+        e.Graphics.DrawImage(_screen, new Rectangle(Point.Empty, _screen.Size)); // exact pixels, ignoring bitmap DPI
         using var dim = new SolidBrush(Color.FromArgb(110, 0, 0, 0));
         using var region = new Region(ClientRectangle);
         if (!_selection.IsEmpty) region.Exclude(_selection);
@@ -146,8 +164,8 @@ internal sealed class ScreenAskForm : Form
         _ask.Text = "Asking…";
         try
         {
-            byte[] png = Encode(_image);
-            string answer = await _s.Ai.AskWithImage(Prompts.System, png, question, _closing.Token);
+            var (bytes, isPng) = Encode(_image);
+            string answer = await _s.Ai.AskWithImage(Prompts.System, bytes, isPng, question, _closing.Token);
             if (IsDisposed) return;
             Ui.AppendHeading(_answer, "Buddy", Ui.Green);
             Ui.AppendBody(_answer, answer);
@@ -175,8 +193,11 @@ internal sealed class ScreenAskForm : Form
         }
     }
 
-    /// <summary>PNG, scaled down so the longest edge is at most 1568 px (cheaper and just as readable).</summary>
-    private static byte[] Encode(Bitmap image)
+    /// <summary>
+    /// PNG (sharp text), scaled so the longest edge is at most 1568 px. Busy game scenes can make a huge PNG,
+    /// so those fall back to JPEG to stay well under the API's per-image size limit.
+    /// </summary>
+    private static (byte[] Bytes, bool IsPng) Encode(Bitmap image)
     {
         double scale = Math.Min(1.0, (double)MaxEdge / Math.Max(image.Width, image.Height));
         using var resized = new Bitmap(Math.Max(1, (int)(image.Width * scale)), Math.Max(1, (int)(image.Height * scale)));
@@ -185,8 +206,15 @@ internal sealed class ScreenAskForm : Form
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.DrawImage(image, 0, 0, resized.Width, resized.Height);
         }
-        using var stream = new MemoryStream();
-        resized.Save(stream, ImageFormat.Png);
-        return stream.ToArray();
+        using var png = new MemoryStream();
+        resized.Save(png, ImageFormat.Png);
+        if (png.Length <= 3_500_000) return (png.ToArray(), true);
+
+        using var jpeg = new MemoryStream();
+        ImageCodecInfo codec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
+        using var quality = new EncoderParameters(1);
+        quality.Param[0] = new EncoderParameter(Encoder.Quality, 85L);
+        resized.Save(jpeg, codec, quality);
+        return (jpeg.ToArray(), false);
     }
 }

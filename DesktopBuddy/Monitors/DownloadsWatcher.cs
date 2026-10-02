@@ -30,6 +30,11 @@ public sealed class DownloadsWatcher : IDisposable
     private static readonly HashSet<string> DecoyExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".pdf", ".doc", ".docx", ".txt", ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mp3", ".xlsx", ".pptx", ".rbxl", ".rbxm" };
 
+    private static readonly ConcurrentDictionary<string, DateTime> IgnoredUntil = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Don't report this file as a new download for a while (used when Undo puts files back).</summary>
+    public static void Ignore(string path) => IgnoredUntil[path] = DateTime.UtcNow.AddMinutes(10);
+
     public static string DownloadsFolder { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
 
@@ -80,8 +85,7 @@ public sealed class DownloadsWatcher : IDisposable
                 lastSize = size;
             }
             if (!ready) return;
-            // Files moved back in (e.g. undoing a Downloads tidy) keep their old creation time: not a new download.
-            if (File.GetCreationTime(path) < DateTime.Now.AddHours(-1)) return;
+            if (IgnoredUntil.TryGetValue(path, out DateTime until) && DateTime.UtcNow < until) return; // put back by "Undo tidy"
 
             _recent[path] = DateTime.UtcNow;
             Downloaded?.Invoke(Inspect(path));

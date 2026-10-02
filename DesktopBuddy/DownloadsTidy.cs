@@ -11,6 +11,7 @@ internal static class DownloadsTidy
 {
     private static readonly string JournalPath = Path.Combine(Settings.Folder, "tidy-journal.json");
     private static readonly string OlderFolder = Path.Combine(DownloadsWatcher.DownloadsFolder, "Older");
+    private static readonly object Gate = new(); // weekly run, "Tidy now" and Undo never overlap
     private static readonly string[] SkipExtensions = [".crdownload", ".part", ".tmp", ".partial", ".download"];
 
     public sealed class Move
@@ -28,6 +29,8 @@ internal static class DownloadsTidy
     private sealed class Journal
     {
         public DateTime? LastRun { get; set; }
+        /// <summary>Files you put back with Undo: left alone for 30 days so the next tidy doesn't move them again.</summary>
+        public Dictionary<string, DateTime> KeepUntil { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public List<Batch> Batches { get; set; } = [];
     }
 
@@ -39,6 +42,11 @@ internal static class DownloadsTidy
 
     /// <summary>Moves old files. Returns how many were moved.</summary>
     public static int Run(Settings settings)
+    {
+        lock (Gate) return RunLocked(settings);
+    }
+
+    private static int RunLocked(Settings settings)
     {
         Journal journal = Load();
         var batch = new Batch { When = DateTime.Now };
@@ -55,6 +63,7 @@ internal static class DownloadsTidy
 
                 DateTime newest = Max(info.LastWriteTime, info.CreationTime);
                 if (newest > cutoff || IsLocked(file)) continue;
+                if (journal.KeepUntil.TryGetValue(file, out DateTime keep) && keep > DateTime.Now) continue;
 
                 string folder = Path.Combine(OlderFolder, newest.ToString("yyyy-MM"));
                 Directory.CreateDirectory(folder);
@@ -69,6 +78,8 @@ internal static class DownloadsTidy
         }
 
         journal.LastRun = DateTime.Now;
+        foreach (string expired in journal.KeepUntil.Where(k => k.Value <= DateTime.Now).Select(k => k.Key).ToList())
+            journal.KeepUntil.Remove(expired);
         if (batch.Moves.Count > 0)
         {
             journal.Batches.Add(batch);
@@ -84,6 +95,11 @@ internal static class DownloadsTidy
     /// <summary>Puts the last batch back. Returns (moved back, skipped because the spot is taken or the file is gone).</summary>
     public static (int Restored, int Skipped) UndoLast()
     {
+        lock (Gate) return UndoLocked();
+    }
+
+    private static (int Restored, int Skipped) UndoLocked()
+    {
         Journal journal = Load();
         if (journal.Batches.Count == 0) return (0, 0);
         Batch last = journal.Batches[^1];
@@ -94,7 +110,9 @@ internal static class DownloadsTidy
             {
                 if (File.Exists(m.To) && !File.Exists(m.From))
                 {
+                    DownloadsWatcher.Ignore(m.From);
                     File.Move(m.To, m.From);
+                    journal.KeepUntil[m.From] = DateTime.Now.AddDays(30);
                     restored++;
                 }
                 else skipped++;

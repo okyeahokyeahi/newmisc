@@ -61,6 +61,7 @@ internal sealed class ApiKeyDialog : Form
         {
             Text = $"Spending cap: ${settings.AiMonthlyBudgetUsd:0.00}/month and {settings.AiMaxCallsPerDay} questions/day (change in settings.json).",
             AutoSize = true,
+            MaximumSize = new Size(480, 0),
             ForeColor = SystemColors.GrayText,
             Margin = new Padding(0, 6, 0, 0),
         });

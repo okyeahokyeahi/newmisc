@@ -61,7 +61,9 @@ public sealed class GpuChoiceWatcher(Settings settings, ResourceMonitor resource
 
         foreach (var (name, (weakPct, strongPct, path)) in usage)
         {
-            bool onWeak = weakPct >= 10 && weakPct > strongPct * 2;
+            // On Optimus laptops a game on the RTX still shows some Intel 3D work (copying frames to the screen),
+            // so only count it when the RTX is basically idle for this app and the Intel chip is clearly busy.
+            bool onWeak = weakPct >= 25 && strongPct < 2;
             _onWeakChip[name] = onWeak ? _onWeakChip.GetValueOrDefault(name) + 1 : 0;
             if (_onWeakChip[name] < SamplesNeeded || !_reported.Add(path)) continue;
 

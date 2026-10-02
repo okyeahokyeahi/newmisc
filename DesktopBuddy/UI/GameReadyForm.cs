@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using DesktopBuddy.Native;
 
 namespace DesktopBuddy.UI;
@@ -11,9 +12,34 @@ namespace DesktopBuddy.UI;
 internal sealed class GameReadyForm : Form
 {
     private static readonly string[] NeverClose =
-        ["discord", "robloxplayerbeta", "robloxplayerlauncher", "desktopbuddy", "explorer", "steam", "steamwebhelper",
-         "nvidia app", "nvcontainer", "nitrosense", "obs64", "textinputhost", "searchhost", "shellexperiencehost",
-         "startmenuexperiencehost", "applicationframehost", "systemsettings", "lockapp"];
+        ["discord", "discordptb", "discordcanary", "robloxplayerbeta", "robloxplayerlauncher", "robloxstudiolauncherbeta",
+         "robloxcrashhandler", "windows10universal", "desktopbuddy", "explorer", "steam", "steamwebhelper",
+         "epicgameslauncher", "riotclientservices", "riotclientux", "battle.net", "eadesktop", "xboxpcapp",
+         "nvidia app", "nvidia overlay", "nvcontainer", "nitrosense", "predatorsense", "acerquickpanel", "quickaccess",
+         "obs64", "textinputhost", "searchhost", "shellexperiencehost", "startmenuexperiencehost", "applicationframehost",
+         "systemsettings", "lockapp", "taskmgr"];
+
+    private const uint WM_CLOSE = 0x0010;
+
+    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowTextLength(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     private readonly BuddyServices _s;
     private readonly ListView _list;
@@ -53,7 +79,7 @@ internal sealed class GameReadyForm : Form
         };
         var bestPerformance = new CheckBox
         {
-            Text = "Switch Windows to \"Best performance\" while I play (switches back after)",
+            Text = "Use \"Best performance\" power mode while I play",
             Dock = DockStyle.Bottom,
             Height = 28,
             Checked = services.Settings.BestPerformanceDuringGames,
@@ -79,10 +105,10 @@ internal sealed class GameReadyForm : Form
         Controls.Add(_reopen);
         Controls.Add(bestPerformance);
         Controls.Add(Ui.ButtonRow(cancel, _closeButton));
-        Load += (_, _) => Fill();
+        Load += (_, _) => Fill(initial: true);
     }
 
-    private void Fill()
+    private void Fill(bool initial = false)
     {
         _list.Items.Clear();
         var apps = (_s.Resources.Latest?.AllApps ?? [])
@@ -105,7 +131,7 @@ internal sealed class GameReadyForm : Form
             if (!isStudio) item.Checked = _s.Settings.GameReadyCloseList.Contains(app.Name, StringComparer.OrdinalIgnoreCase);
         }
 
-        if (_list.Items.Count == 0) _result.Text = "Nothing big is open. You're ready!";
+        if (initial && _list.Items.Count == 0) _result.Text = "Nothing big is open. You're ready!";
     }
 
     private async Task CloseTicked()
@@ -116,34 +142,22 @@ internal sealed class GameReadyForm : Form
         // Remember the choice for next time.
         _s.Settings.GameReadyCloseList = names;
         _s.Settings.ReopenBrowserAfterGame = _reopen.Checked;
-        if (_reopen.Checked && names.Any(n => n.Equals("chrome", StringComparison.OrdinalIgnoreCase)))
-            _s.Settings.BrowserToReopen = FirstPath("chrome");
+        bool closingChrome = names.Any(n => n.Equals("chrome", StringComparison.OrdinalIgnoreCase));
+        if (_reopen.Checked && closingChrome) _s.Settings.BrowserToReopen = FirstPath("chrome");
+        _s.Settings.ReopenBrowserPending = _reopen.Checked && closingChrome; // after the next game only
         _s.Settings.Save();
 
         _closeButton.Enabled = false;
         _result.Text = "Closing…";
         ulong before = AvailableRam();
 
-        foreach (string name in names)
+        // Ask every window of those apps to close (like clicking X). Chrome can have several windows,
+        // so this repeats a few times while they close one after another.
+        for (int i = 0; i < 16 && names.Any(StillRunning); i++)
         {
-            foreach (Process p in Process.GetProcessesByName(name))
-            {
-                using (p)
-                {
-                    try
-                    {
-                        if (p.MainWindowHandle != IntPtr.Zero) p.CloseMainWindow();
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // already exited
-                    }
-                }
-            }
+            if (i % 4 == 0) CloseAllWindows(names);
+            await Task.Delay(500);
         }
-
-        // Give apps a few seconds to close (and save) on their own.
-        for (int i = 0; i < 16 && names.Any(StillRunning); i++) await Task.Delay(500);
         if (IsDisposed) return;
 
         double freedGb = Math.Max(0, (double)AvailableRam() - before) / 1073741824.0;
@@ -152,6 +166,31 @@ internal sealed class GameReadyForm : Form
                        (stubborn.Count > 0 ? $" Still running (probably in the tray): {string.Join(", ", stubborn)}." : " Have fun!");
         _closeButton.Enabled = true;
         Fill();
+    }
+
+    /// <summary>Posts WM_CLOSE to every visible top-level window owned by these apps.</summary>
+    private static void CloseAllWindows(IEnumerable<string> names)
+    {
+        var pids = new HashSet<uint>();
+        foreach (string name in names)
+        {
+            foreach (Process p in Process.GetProcessesByName(name))
+            {
+                pids.Add((uint)p.Id);
+                p.Dispose();
+            }
+        }
+
+        EnumWindows((hwnd, _) =>
+        {
+            const uint GW_OWNER = 4;
+            if (IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == IntPtr.Zero && GetWindowTextLength(hwnd) > 0 &&
+                GetWindowThreadProcessId(hwnd, out uint pid) != 0 && pids.Contains(pid))
+            {
+                PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            }
+            return true;
+        }, IntPtr.Zero);
     }
 
     private static bool StillRunning(string name)

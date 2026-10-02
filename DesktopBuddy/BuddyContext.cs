@@ -146,7 +146,7 @@ internal sealed class BuddyContext : ApplicationContext
         {
             settings.StartWithWindows = startWithWindows.Checked;
             settings.Save();
-            if (settings.StartWithWindows && !Autostart.Enable())
+            if (settings.StartWithWindows && !Autostart.Enable(settings))
             {
                 startWithWindows.Checked = settings.StartWithWindows = false;
                 settings.Save();
@@ -156,7 +156,7 @@ internal sealed class BuddyContext : ApplicationContext
         };
         menu.Items.Add(startWithWindows);
         menu.Items.Add(BuildTidyMenu());
-        menu.Items.Add("Set API key…", null, (_, _) => _services.ShowApiKey());
+        menu.Items.Add("AI setup (API key, model)…", null, (_, _) => _services.ShowApiKey());
         menu.Items.Add($"Check for updates (you have {Updater.CurrentVersion.ToString(3)})", null, async (_, _) => await CheckForUpdates(manual: true));
         menu.Items.Add("Edit settings (restart to apply)", null, (_, _) => OpenFile("notepad.exe", Settings.FilePath));
         menu.Items.Add("Open log folder", null, (_, _) => OpenFile("explorer.exe", Settings.Folder));
@@ -186,6 +186,7 @@ internal sealed class BuddyContext : ApplicationContext
         _slowUiTimer.Tick += (_, _) => SlowUiTick();
         _slowUiTimer.Start();
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        Microsoft.Win32.SystemEvents.SessionEnding += OnSessionEnding;
         _ = Task.Delay(TimeSpan.FromSeconds(20)).ContinueWith(_ => _ui.Post(_ => SlowUiTick(), null));
 
         if (settings.CheckForUpdates)
@@ -199,6 +200,7 @@ internal sealed class BuddyContext : ApplicationContext
         }
 
         Log.Info($"Desktop Buddy {Updater.CurrentVersion.ToString(3)} started");
+        RestoreLeftoverPowerMode();
         _ = Task.Run(() => Autostart.Sync(settings)); // schtasks takes a moment; don't hold up the tray
         _loop = Task.Run(() => MonitorLoop(_stop.Token));
         Notify("Desktop Buddy is running", "I'm in the system tray. Double-click me for live stats.", ToolTipIcon.Info, critical: true);
@@ -333,7 +335,6 @@ internal sealed class BuddyContext : ApplicationContext
     private void Notify(string title, string text, ToolTipIcon icon = ToolTipIcon.Warning, bool critical = false, Action? onClick = null)
     {
         Log.Info($"Alert: {title}: {text}");
-        if (title is not ("Scanning…" or "Done" or "Reminder")) _services.LastAlert = $"{title}: {text}";
         if (!critical)
         {
             if (Paused) return;
@@ -343,6 +344,7 @@ internal sealed class BuddyContext : ApplicationContext
                 return;
             }
         }
+        if (icon is ToolTipIcon.Warning or ToolTipIcon.Error) _services.LastAlert = $"{title}: {text}"; // warnings the user actually saw
         _balloonClick = onClick;
         _balloonShownAt = DateTime.UtcNow;
         // Windows cuts balloon text at 255 characters and titles at 63.
@@ -355,6 +357,18 @@ internal sealed class BuddyContext : ApplicationContext
     {
         _pausedUntil = Paused ? DateTime.MinValue : DateTime.Now.AddHours(1);
         UiTick();
+    }
+
+    /// <summary>Shutting down or logging off mid-game: put the power mode back now (exit code may not run).</summary>
+    private void OnSessionEnding(object? sender, Microsoft.Win32.SessionEndingEventArgs e)
+    {
+        if (_powerModeBeforeGame is Guid previous)
+        {
+            PowerMode.Set(previous);
+            _powerModeBeforeGame = null;
+            _settings.PowerModeToRestore = null;
+            _settings.Save();
+        }
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
@@ -411,6 +425,13 @@ internal sealed class BuddyContext : ApplicationContext
     // ---------- Feature handlers ----------
     private Guid? _powerModeBeforeGame;
 
+    private static bool IsRunning(string processName)
+    {
+        Process[] ps = Process.GetProcessesByName(processName);
+        foreach (Process p in ps) p.Dispose();
+        return ps.Length > 0;
+    }
+
     private void OnGameStarted()
     {
         if (!_settings.BestPerformanceDuringGames || _powerModeBeforeGame != null) return;
@@ -419,8 +440,22 @@ internal sealed class BuddyContext : ApplicationContext
         if (PowerMode.Set(PowerMode.BestPerformance))
         {
             _powerModeBeforeGame = current;
+            _settings.PowerModeToRestore = current.ToString(); // survives a crash mid-game
+            _settings.Save();
             Log.Info("Power mode: Best performance for the game");
         }
+    }
+
+    /// <summary>At startup: undo a Best performance switch left over from a crash or forced close mid-game.</summary>
+    private void RestoreLeftoverPowerMode()
+    {
+        if (_settings.PowerModeToRestore is string saved && Guid.TryParse(saved, out Guid previous))
+        {
+            PowerMode.Set(previous);
+            Log.Info("Restored the power mode left over from the last session");
+        }
+        _settings.PowerModeToRestore = null;
+        _settings.Save();
     }
 
     private void OnGameStopped()
@@ -430,12 +465,16 @@ internal sealed class BuddyContext : ApplicationContext
         {
             PowerMode.Set(previous);
             _powerModeBeforeGame = null;
+            _settings.PowerModeToRestore = null;
+            _settings.Save();
             Log.Info("Power mode restored");
         }
 
-        if (_settings.ReopenBrowserAfterGame && _settings.BrowserToReopen is string browser && File.Exists(browser) &&
-            Process.GetProcessesByName(Path.GetFileNameWithoutExtension(browser)).Length == 0)
+        if (_settings.ReopenBrowserPending && _settings.BrowserToReopen is string browser && File.Exists(browser) &&
+            !IsRunning(Path.GetFileNameWithoutExtension(browser)))
         {
+            _settings.ReopenBrowserPending = false; // one game only
+            _settings.Save();
             try
             {
                 PowerMode.StartAsUser(browser); // via Explorer, so it doesn't run as admin
@@ -449,6 +488,7 @@ internal sealed class BuddyContext : ApplicationContext
 
     private void OnGameEnded(GameSessionReport report)
     {
+        _lastAfterGameToast = DateTime.UtcNow; // give the "Game over" toast 20 s before replaying held alerts
         bool throttled = report.CpuHeatSlowdown > TimeSpan.FromSeconds(10) || report.GpuHeatSlowdown > TimeSpan.FromSeconds(10);
         string text = $"{(int)report.Length.TotalMinutes} min · peak CPU {Format.Temp(report.PeakCpuC)}, GPU {Format.Temp(report.PeakGpuC)}, RAM {report.PeakRamPercent}%" +
                       (throttled ? " · slowed down from heat" : "") +
@@ -712,12 +752,12 @@ internal sealed class BuddyContext : ApplicationContext
         return root;
     }
 
-    private void UndoTidy()
+    private void UndoTidy() => _ = Task.Run(() =>
     {
         var (restored, skipped) = DownloadsTidy.UndoLast();
-        Notify("Tidy undone", $"Put {restored} file(s) back in Downloads." + (skipped > 0 ? $" {skipped} couldn't be (moved or renamed since)." : ""),
-            ToolTipIcon.Info, critical: true);
-    }
+        _ui.Post(_ => Notify("Tidy undone", $"Put {restored} file(s) back in Downloads." + (skipped > 0 ? $" {skipped} couldn't be (moved or renamed since)." : ""),
+            ToolTipIcon.Info, critical: true), null);
+    });
 
     // ---------- Windows ----------
     private void ToggleQuickPanel()
@@ -825,10 +865,16 @@ internal sealed class BuddyContext : ApplicationContext
         _screenHotkey?.Dispose();
         if (KeepAwake.Until != null) KeepAwake.Set(null);
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+        Microsoft.Win32.SystemEvents.SessionEnding -= OnSessionEnding;
         _tray.Visible = false;
         bool loopStopped;
         try { loopStopped = _loop.Wait(TimeSpan.FromSeconds(10)); } catch { loopStopped = true; }
-        if (_powerModeBeforeGame is Guid previous) PowerMode.Set(previous);
+        if (_powerModeBeforeGame is Guid previous)
+        {
+            PowerMode.Set(previous);
+            _settings.PowerModeToRestore = null;
+            _settings.Save();
+        }
         if (loopStopped)
         {
             _temps.Dispose(); // never close the sensor driver while a read is still running

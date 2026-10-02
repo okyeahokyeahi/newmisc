@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 
 namespace DesktopBuddy.Monitors;
 
@@ -13,12 +14,14 @@ public sealed record NetworkSummary(
     double? WorstMs,
     int? WeakestSignalPercent,
     string? Band,             // "2.4 GHz" / "5 GHz" / "6 GHz"
-    bool Wired)
+    bool Wired,
+    bool Unmeasurable = false) // pings to the internet were blocked (some networks/VPNs do that)
 {
     /// <summary>Plain-English verdict for the game report.</summary>
     public string Verdict()
     {
         if (Samples < 10) return "Not enough data (short session).";
+        if (Unmeasurable) return "Couldn't measure: this network blocks the test pings (common with some VPNs and school/work Wi-Fi).";
         string connection = Wired ? "cable" : $"Wi-Fi{(Band != null ? $" ({Band})" : "")}{(WeakestSignalPercent is int s ? $", signal down to {s}%" : "")}";
         if (Spikes == 0) return $"Connection was steady the whole time (avg {AverageMs:0} ms, {connection}).";
 
@@ -40,7 +43,13 @@ public sealed record NetworkSummary(
 public sealed class NetworkProbe
 {
     private const int SpikeMs = 150;
-    private static readonly IPAddress InternetTarget = IPAddress.Parse("1.1.1.1");
+    private static readonly IPAddress[] InternetTargets = [IPAddress.Parse("1.1.1.1"), IPAddress.Parse("8.8.8.8")];
+
+    [DllImport("iphlpapi.dll")]
+    private static extern int GetBestInterface(uint destAddr, out uint bestIfIndex);
+
+    private int _generation; // samples from an old session that hasn't fully stopped are ignored
+    private int _targetIndex;
 
     private CancellationTokenSource? _cts;
     private Task? _task;
@@ -53,14 +62,17 @@ public sealed class NetworkProbe
     public void Start()
     {
         if (_task != null) return;
+        int generation;
         lock (_gate)
         {
             _samples.Clear();
             _signals.Clear();
             _band = null;
+            _targetIndex = 0;
+            generation = ++_generation;
         }
         _cts = new CancellationTokenSource();
-        _task = Task.Run(() => Run(_cts.Token));
+        _task = Task.Run(() => Run(generation, _cts.Token));
     }
 
     public NetworkSummary Stop()
@@ -73,7 +85,10 @@ public sealed class NetworkProbe
 
         lock (_gate)
         {
+            _generation++; // anything still running from this session stops recording
             var internet = _samples.Where(s => s.Internet != null).Select(s => s.Internet!.Value).ToList();
+            bool blocked = _samples.Count >= 10 && internet.Count < _samples.Count / 2;
+            if (blocked) return new NetworkSummary(_samples.Count, 0, 0, null, null, null, _band, _wired, Unmeasurable: true);
             int spikes = 0, local = 0;
             foreach (var (router, net) in _samples)
             {
@@ -89,21 +104,36 @@ public sealed class NetworkProbe
         }
     }
 
-    private async Task Run(CancellationToken token)
+    private async Task Run(int generation, CancellationToken token)
     {
         using var ping = new Ping();
-        int tick = 0;
+        int tick = 0, internetFails = 0;
         while (!token.IsCancellationRequested)
         {
             try
             {
                 IPAddress? gateway = DefaultGateway(out bool wired);
-                _wired = wired;
                 double? router = gateway == null ? null : await PingMs(ping, gateway);
-                double? internet = await PingMs(ping, InternetTarget);
-                lock (_gate) _samples.Add((router, internet));
+                IPAddress target;
+                lock (_gate) target = InternetTargets[_targetIndex];
+                double? internet = await PingMs(ping, target);
 
-                if (!wired && tick++ % 15 == 0) ReadWifi(); // every ~30 s
+                // If the first target never answers early on, it's probably blocked: try the other one.
+                internetFails = internet == null ? internetFails + 1 : 0;
+                lock (_gate)
+                {
+                    if (generation != _generation) return;
+                    _wired = wired;
+                    if (internetFails >= 5 && _samples.Count < 15 && _targetIndex == 0)
+                    {
+                        _targetIndex = 1;
+                        _samples.Clear();
+                        internetFails = 0;
+                    }
+                    else _samples.Add((router, internet));
+                }
+
+                if (!wired && tick++ % 15 == 0) ReadWifi(generation); // every ~30 s
             }
             catch (Exception ex)
             {
@@ -127,12 +157,25 @@ public sealed class NetworkProbe
         }
     }
 
+    /// <summary>The router of the interface Windows actually uses to reach the internet (skips VPN/Hyper-V adapters that aren't the route).</summary>
     private static IPAddress? DefaultGateway(out bool wired)
     {
         wired = false;
+        int? bestIndex = null;
+        try
+        {
+            uint dest = BitConverter.ToUInt32(InternetTargets[0].GetAddressBytes(), 0);
+            if (GetBestInterface(dest, out uint index) == 0) bestIndex = (int)index;
+        }
+        catch (DllNotFoundException)
+        {
+            // fall back to the first adapter with a gateway
+        }
+
         foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (nic.OperationalStatus != OperationalStatus.Up) continue;
+            if (bestIndex != null && nic.GetIPProperties().GetIPv4Properties()?.Index != bestIndex) continue;
             if (nic.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
             var gw = nic.GetIPProperties().GatewayAddresses
                 .Select(g => g.Address)
@@ -145,7 +188,7 @@ public sealed class NetworkProbe
     }
 
     /// <summary>Signal % and band from "netsh wlan show interfaces" (English Windows labels).</summary>
-    private void ReadWifi()
+    private void ReadWifi(int generation)
     {
         try
         {
@@ -165,12 +208,16 @@ public sealed class NetworkProbe
                 int colon = line.IndexOf(':');
                 if (colon < 0) continue;
                 string label = line[..colon].Trim(), value = line[(colon + 1)..].Trim();
-                if (label.Equals("Signal", StringComparison.OrdinalIgnoreCase) && int.TryParse(value.TrimEnd('%'), out int signal))
-                    lock (_gate) _signals.Add(signal);
-                else if (label.Equals("Band", StringComparison.OrdinalIgnoreCase))
-                    _band = value;
-                else if (label.Equals("Channel", StringComparison.OrdinalIgnoreCase) && _band == null && int.TryParse(value, out int channel))
-                    _band = channel <= 14 ? "2.4 GHz" : "5 GHz";
+                lock (_gate)
+                {
+                    if (generation != _generation) return;
+                    if (label.Equals("Signal", StringComparison.OrdinalIgnoreCase) && int.TryParse(value.TrimEnd('%'), out int signal))
+                        _signals.Add(signal);
+                    else if (label.Equals("Band", StringComparison.OrdinalIgnoreCase))
+                        _band = value;
+                    else if (label.Equals("Channel", StringComparison.OrdinalIgnoreCase) && _band == null && int.TryParse(value, out int channel))
+                        _band = channel <= 14 ? "2.4 GHz" : "5 GHz";
+                }
             }
         }
         catch (Exception ex)

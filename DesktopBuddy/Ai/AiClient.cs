@@ -62,7 +62,7 @@ internal sealed class AiClient(Settings settings)
         }).ToList(), cancel);
 
     /// <summary>Asks about a picture (a screenshot region the user picked and previewed).</summary>
-    public Task<string> AskWithImage(string system, byte[] png, string question, CancellationToken cancel = default) =>
+    public Task<string> AskWithImage(string system, byte[] image, bool isPng, string question, CancellationToken cancel = default) =>
         Send(system,
         [
             new BetaMessageParam
@@ -70,7 +70,7 @@ internal sealed class AiClient(Settings settings)
                 Role = Role.User,
                 Content = new List<BetaContentBlockParam>
                 {
-                    new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = Convert.ToBase64String(png), MediaType = MediaType.ImagePng } },
+                    new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = Convert.ToBase64String(image), MediaType = isPng ? MediaType.ImagePng : MediaType.ImageJpeg } },
                     new BetaTextBlockParam { Text = question },
                 },
             },
@@ -89,7 +89,7 @@ internal sealed class AiClient(Settings settings)
 
         lock (UsageGate)
         {
-            // Reserve this call now so two windows asking at once can't both slip under the cap.
+            // At most two questions at once (e.g. chat + "What is this?"); the cap may overshoot by one call.
             if (_inFlight >= 2) throw new AiUnavailableException("Still answering your last question. One moment.");
             _inFlight++;
         }

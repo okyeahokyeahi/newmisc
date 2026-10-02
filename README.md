@@ -117,6 +117,11 @@ A log is kept at `%AppData%\DesktopBuddy\log.txt` (tray menu → *Open log folde
 - `RunOnce` startup entries are skipped because Windows Update and driver installers use them constantly.
 - CPU heat-slowdown detection is a close estimate (near the 100°C limit), not the CPU's internal flag. The GPU one is exact.
 - The Downloads check can only spot password protection in `.zip` and RAR5 files, not `.7z`.
+- The lag explainer reads Wi-Fi signal/band from `netsh`, which only works on English Windows (and needs location access on
+  Windows 11 24H2). Ping-based spike counting works regardless.
+- *Start with Windows* needs your account to be an administrator (the app requires admin rights).
+- The wrong-graphics-chip check only warns when the RTX is basically idle for that app, so a game split across both chips
+  may not be caught.
 - RAM per app is the *working set*, which double-counts memory shared between processes, so
   multi-process apps like Chrome can look a bit bigger than in Task Manager.
 - The signature check only reads signatures embedded in the file. That's why "unsigned" is never

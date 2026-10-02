@@ -52,7 +52,8 @@ public sealed class LaptopCareMonitor
         foreach (string line in File.ReadLines(SessionsCsv).Skip(1))
         {
             string[] c = line.Split(',');
-            if (c.Length < 5 || !DateTime.TryParseExact(c[0], "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime start)) continue;
+            if (c.Length < 5 || !DateTime.TryParseExact(c[0], ["yyyy-MM-dd HH:mm", "yyyy-MM-dd HH.mm"], CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out DateTime start)) continue; // older rows may use a '.' time separator
             rows.Add((start, c[1], Num(c[2]) ?? 0, Num(c[3]), Num(c[4])));
         }
 
@@ -138,7 +139,9 @@ public sealed class LaptopCareMonitor
                     using (e)
                     {
                         double? ms = DataField(e, "BootTime");
-                        if (ms is > 0 && e.RecordId is long id && e.TimeCreated is DateTime when) boots.Add((id, when, ms.Value));
+                        // The restart after installing updates is always slow; don't count it.
+                        bool afterUpdate = DataText(e, "BootIsRebootAfterInstall")?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+                        if (ms is > 0 && !afterUpdate && e.RecordId is long id && e.TimeCreated is DateTime when) boots.Add((id, when, ms.Value));
                     }
                 }
             }

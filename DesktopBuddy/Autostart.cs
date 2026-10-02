@@ -15,16 +15,13 @@ internal static class Autostart
 
     public static string ExePath => Path.Combine(AppContext.BaseDirectory, "DesktopBuddy.exe");
 
-    /// <summary>True if the logon task exists and points at this copy of the app.</summary>
-    public static bool IsEnabled()
-    {
-        var (code, output) = RunSchtasks($"/Query /TN \"{TaskName}\" /XML");
-        return code == 0 && output.Contains(SecurityElement.Escape(ExePath), StringComparison.OrdinalIgnoreCase);
-    }
+    /// <summary>True if the logon task exists and was registered for this copy of the app.</summary>
+    public static bool IsEnabled(Settings settings) =>
+        string.Equals(settings.AutostartRegisteredPath, ExePath, StringComparison.OrdinalIgnoreCase) && TaskExists();
 
     public static bool TaskExists() => RunSchtasks($"/Query /TN \"{TaskName}\"").Code == 0;
 
-    public static bool Enable()
+    public static bool Enable(Settings settings)
     {
         string user = WindowsIdentity.GetCurrent().Name;
         string exe = SecurityElement.Escape(ExePath)!;
@@ -52,7 +49,7 @@ internal static class Autostart
                 <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
                 <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
                 <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-                <Priority>7</Priority>
+                <Priority>4</Priority>
                 <Enabled>true</Enabled>
               </Settings>
               <Actions Context="Author">
@@ -70,7 +67,12 @@ internal static class Autostart
             File.WriteAllText(file, xml, Encoding.Unicode); // matches the UTF-16 declaration
             var (code, output) = RunSchtasks($"/Create /TN \"{TaskName}\" /XML \"{file}\" /F");
             if (code != 0) Log.Error($"Creating the startup task failed: {output.Trim()}");
-            else Log.Info("Start with Windows: on");
+            else
+            {
+                Log.Info("Start with Windows: on");
+                settings.AutostartRegisteredPath = ExePath;
+                settings.Save();
+            }
             return code == 0;
         }
         finally
@@ -92,7 +94,7 @@ internal static class Autostart
     {
         try
         {
-            if (settings.StartWithWindows && !IsEnabled()) Enable();
+            if (settings.StartWithWindows && !IsEnabled(settings)) Enable(settings);
             else if (!settings.StartWithWindows) Disable();
         }
         catch (Exception ex)
