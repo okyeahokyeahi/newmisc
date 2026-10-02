@@ -21,6 +21,16 @@ Acer Nitro AN515-57 but runs on any Windows 10/11 PC.
 | **Disk space warning** | Warns when C: drops below 20 GB or 10% free. |
 | **Game mode + report** | While Roblox, a Steam/Epic/Riot game or any full-screen game runs, alerts and popups wait. Afterwards: play time, peak temperatures and RAM, heat-slowdown minutes, and any held alerts. Sessions are logged to `game-sessions.csv`. |
 | **Ask Buddy (AI)** | A chat window that sees your live temperatures, RAM and busiest apps. Needs an API key (tray menu → *Set API key…*), stored in Windows Credential Manager. |
+| **Quick panel** | **Ctrl+Alt+B** or a left-click on the tray face: temperatures, RAM, the main buttons, keep-awake (1 h / 3 h / until off), your 5 newest downloads, and quick reminders (including "after my game"). |
+| **Start with Windows** | On by default (tray menu checkbox). Uses a Task Scheduler task, so there's no admin prompt at every boot. |
+| **Get game-ready** | Tick apps to close before playing (they close normally, like clicking X), see how much RAM was freed. Discord, Roblox and games are never offered, and Roblox Studio is never closed for you. Can reopen Chrome after the game. |
+| **Best performance during games** | Switches Windows' power mode to Best performance while a game runs and puts it back afterwards. |
+| **Wrong graphics chip check** | Warns if Roblox, Studio or a game draws on the weak Intel chip instead of the RTX for a minute, and fixes it with one click. Fixed apps stay fixed when Roblox updates. |
+| **Lag explainer** | The game report says how many lag spikes you had and whether they came from your Wi-Fi (with signal and 2.4/5 GHz) or from past your router. |
+| **Screen refresh check** | Notices a screen stuck at 60 Hz when it can do more (e.g. 144 Hz) and switches it after you confirm. |
+| **Restart reminder** | If a Windows update has waited 3+ days for a restart: one reminder a day, never during a game. |
+| **Laptop care** | Occasional tips: "runs ~7°C hotter in Roblox than in March, the vents may be dusty", an old NVIDIA driver, and a slow Windows startup with what Windows blamed. The status window shows your last startup time. |
+| **Downloads tidy** (off by default) | Weekly, moves files older than 14 days into `Downloads\Older\<year-month>`. Never deletes, and every tidy can be undone (tray menu → *Downloads tidy*). |
 
 Right-click the tray icon for the menu, or double-click it for the live status window.
 **Pause alerts for 1 hour** silences notifications and holds back suspicious-program popups (handy while gaming).
@@ -32,18 +42,22 @@ Right-click the tray icon for the menu, or double-click it for the live status w
 
 This catches junk, adware and sketchy downloads. **It is not antivirus**; keep Windows Defender on.
 
-## AI (Ask Buddy) details
-- **Model:** `claude-opus-5-5` by default (change `AiModel` in settings, e.g. to the cheaper `claude-haiku-4-5`). If the model
-  declines a question, Anthropic's server retries it on a fallback model automatically (`fallbacks: "default"`).
-- **Cost:** roughly 1–3 cents per question on the default model. A hard cap stops it at **$2/month** and **100 questions/day**
-  (`AiMonthlyBudgetUsd`, `AiMaxCallsPerDay`). The status window shows this month's spend.
-- **What's sent:** program names and numbers only (temperatures, RAM, the busiest apps). Never window titles, files, the
-  clipboard or your username. Click *What gets sent?* in the chat window to see it.
+## AI details (once you add an API key)
+- **Model:** pick it in tray menu → *Set API key…*. **Claude Haiku 4.5** is the default and recommended: the cheapest, at
+  about ¼–½ cent per question. Sonnet 5.5 (~1¢) and Opus 5.5 (~1–3¢) are smarter options. On Sonnet/Opus, a question the
+  model declines is retried automatically on a fallback model (`fallbacks: "default"`); Haiku doesn't support that.
+- **Cost cap:** stops at **$2/month** and **100 questions/day** (`AiMonthlyBudgetUsd`, `AiMaxCallsPerDay`). The status window
+  shows this month's spend.
+- **Where AI shows up:** Ask Buddy chat; "What is this?" on any app; *About my last alert*; *Ask Buddy about this session* in
+  game reports; *Is this safe?* on a recent download in the quick panel; and **Ask about something on screen** (Ctrl+Alt+S):
+  drag a box around an error or setting, check the preview, then send it with your question.
+- **What's sent:** program names and numbers only (temperatures, RAM, the busiest apps), plus a screenshot only when you
+  pick one yourself and press Ask. Never window titles, files, the clipboard or your username. Click *What gets sent?* in the
+  chat window to see it. Every AI question starts with you pressing a button; nothing is sent in the background.
 - **What it can do:** only answer. The AI can't click, close or change anything.
 
 ## What it does NOT do
 - **No fan control.** NitroSense has no public API, and the undocumented route is risky. Use NitroSense's Max fan when it warns you.
-- It doesn't start with Windows automatically (see below for a manual way).
 - More ideas are saved in [ROADMAP.md](ROADMAP.md).
 
 ## How to get it running
@@ -57,9 +71,7 @@ This catches junk, adware and sketchy downloads. **It is not antivirus**; keep W
    Admin is required to read CPU temperatures and to inspect programs running as admin.
 5. Windows SmartScreen may warn because the app isn't code-signed: *More info → Run anyway*.
 
-**Start with Windows (optional):** Task Scheduler → *Create Task* → tick *Run with highest privileges* →
-Trigger *At log on* → Action *Start a program* → pick `DesktopBuddy.exe`. (A normal Startup shortcut
-would show a UAC prompt on every boot.)
+Desktop Buddy starts with Windows automatically from then on (untick *Start with Windows* in the tray menu to stop that).
 
 ## Updating
 Desktop Buddy updates itself. A minute after it starts (and every 6 hours after that) it checks the Releases page. When a
@@ -88,7 +100,12 @@ Tray menu → *Edit settings* opens `%AppData%\DesktopBuddy\settings.json`. Rest
 | `DiskFreeWarnGb` | 20 | Low-disk warning level |
 | `GameProcessNames` | Roblox, Fortnite… | Extra games that turn on game mode (Steam/Epic/Riot games are detected automatically) |
 | `WatchDefender` / `WatchHiddenStartup` / `WatchDownloads` | true | Turn those features on/off |
-| `AiModel` / `AiMonthlyBudgetUsd` / `AiMaxCallsPerDay` | claude-opus-5-5 / 2.00 / 100 | AI model and spending cap |
+| `AiModel` / `AiMonthlyBudgetUsd` / `AiMaxCallsPerDay` | claude-haiku-4-5 / 2.00 / 100 | AI model and spending cap |
+| `StartWithWindows` | true | Start at logon (also a tray checkbox) |
+| `GameReadyCloseList` | chrome, msedge… | Apps *Get game-ready* ticks by default (remembers your last choice) |
+| `BestPerformanceDuringGames` | true | Best performance power mode during games |
+| `WatchGraphicsChip` / `ForceRtxApps` | true / [] | Wrong-chip check, and apps you switched to the RTX |
+| `TidyDownloads` / `TidyAfterDays` | false / 14 | Weekly Downloads tidy |
 
 A log is kept at `%AppData%\DesktopBuddy\log.txt` (tray menu → *Open log folder*).
 

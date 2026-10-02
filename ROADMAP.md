@@ -14,6 +14,30 @@
   - Hidden-miner / idle-hog check (#10)
   - Ask Buddy AI chat, ready for an API key (#11)
 
+- **v1.2:**
+  - Start with Windows
+  - Wrong graphics chip check
+  - Get game-ready, plus Best performance during games
+  - Lag explainer
+  - 60 Hz check
+  - Restart reminder
+  - Quick panel (keep-awake, recent downloads, reminders)
+  - Dusty-vents hint
+  - Old NVIDIA driver tip
+  - Downloads tidy
+  - Boot-time tracker
+  - AI model picker (Haiku default), plus screenshot, alert, session and download questions
+
+## Saved for later (from the second idea round)
+- **Headset/speakers hotkey.** Ctrl+Alt+A switches the default sound and mic device. It needs the undocumented
+  `IPolicyConfig` COM interface (the one SoundSwitch uses).
+- **"Why did Roblox kick me?"** Read the newest `%LocalAppData%\Roblox\logs` file after RobloxPlayerBeta exits and translate
+  disconnect codes (267, 268, 277, 279, 529…) into plain English for the game report. The log format is unofficial, so match loosely.
+- **Studio crash-recovery pointer.** After an unexpected Studio exit, point to the newest AutoSaves file and optionally keep extra copies.
+- **Buddy settings window.** Name, face style, quiet hours and sound, instead of editing settings.json.
+- **Late-night nudge.** One quiet message after a late game. Opt-in.
+- **Game clip storage.** Add space used by Game Bar / NVIDIA / Discord clips to the disk warning.
+
 ## Saved for later (picked from the 15-idea list)
 - **#12 Roblox Studio plugin scanner.** Scan `%LocalAppData%\Roblox\Plugins` for patterns backdoored free plugins use
   (`require(<number>)`, `getfenv`, `loadstring`). Results shown as "maybe", since it's a best guess.
