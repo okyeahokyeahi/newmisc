@@ -37,6 +37,7 @@ internal static class Updater
         using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         string tag = doc.RootElement.GetProperty("tag_name").GetString() ?? "";
         if (!Version.TryParse(tag.TrimStart('v', 'V'), out Version? latest)) return null;
+        Log.Info($"Update check: latest is {tag}, running {CurrentVersion}");
         if (Normalize(latest) <= Normalize(CurrentVersion)) return null;
 
         foreach (JsonElement asset in doc.RootElement.GetProperty("assets").EnumerateArray())
@@ -85,12 +86,20 @@ internal static class Updater
         string exe = Path.Combine(installDir, "DesktopBuddy.exe");
         int pid = Environment.ProcessId;
         string script = Path.Combine(work, "apply-update.cmd");
+        string scriptLog = Path.Combine(Settings.Folder, "update-log.txt");
         File.WriteAllText(script,
             "@echo off\r\n" +
+            $"echo %date% %time% waiting for Desktop Buddy (pid {pid}) to close> \"{scriptLog}\"\r\n" +
+            "set /a tries=0\r\n" +
             ":wait\r\n" +
-            $"tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n" +
-            $"robocopy \"{staging}\" \"{installDir}\" /E /R:5 /W:1 /NFL /NDL /NJH /NJS >nul\r\n" +
-            $"start \"\" \"{exe}\"\r\n");
+            "set /a tries+=1\r\n" +
+            // give up waiting after ~60 s rather than hanging forever
+            $"tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && if %tries% lss 60 (timeout /t 1 /nobreak >nul & goto wait)\r\n" +
+            $"echo %date% %time% copying files>> \"{scriptLog}\"\r\n" +
+            $"robocopy \"{staging}\" \"{installDir}\" /E /R:10 /W:1 /NFL /NDL /NJH /NJS >> \"{scriptLog}\"\r\n" +
+            $"echo %date% %time% robocopy exit code %errorlevel% (0-7 = OK)>> \"{scriptLog}\"\r\n" +
+            $"start \"\" \"{exe}\"\r\n" +
+            $"echo %date% %time% started the new version>> \"{scriptLog}\"\r\n");
 
         Log.Info($"Applying update {CurrentVersion} -> {update.Version} into {installDir}");
         // Started from this (already elevated) app, so the relaunch needs no admin prompt.

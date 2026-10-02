@@ -41,6 +41,8 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly Task _loop;
     private readonly System.Windows.Forms.Timer _updateTimer = new() { Interval = 60_000 };
     private bool _updating;
+    private UpdateInfo? _availableUpdate;
+    private ToolStripMenuItem _installUpdateItem = null!;
 
     private StatusForm? _statusForm;
     private AskBuddyForm? _askForm;
@@ -158,6 +160,10 @@ internal sealed class BuddyContext : ApplicationContext
         menu.Items.Add(BuildTidyMenu());
         menu.Items.Add("AI setup (API key, model)…", null, (_, _) => _services.ShowApiKey());
         menu.Items.Add($"Check for updates (you have {Updater.CurrentVersion.ToString(3)})", null, async (_, _) => await CheckForUpdates(manual: true));
+        // Shown at the top of the menu once an update is found, so installing never depends on catching a notification.
+        _installUpdateItem = new ToolStripMenuItem { Visible = false, Font = new Font(menu.Font, FontStyle.Bold) };
+        _installUpdateItem.Click += (_, _) => { if (_availableUpdate != null) ConfirmAndInstall(_availableUpdate); };
+        menu.Items.Insert(0, _installUpdateItem);
         menu.Items.Add("Edit settings (restart to apply)", null, (_, _) => OpenFile("notepad.exe", Settings.FilePath));
         menu.Items.Add("Open log folder", null, (_, _) => OpenFile("explorer.exe", Settings.Folder));
         menu.Items.Add(new ToolStripSeparator());
@@ -177,7 +183,11 @@ internal sealed class BuddyContext : ApplicationContext
         // Windows only says "a balloon was clicked", not which one. Older ones clicked later from the
         // notification centre could run the wrong action, so after a minute a click just opens the status window.
         _tray.BalloonTipClicked += (_, _) =>
-            (DateTime.UtcNow - _balloonShownAt < TimeSpan.FromSeconds(60) ? _balloonClick ?? ShowStatus : ShowStatus)();
+        {
+            // An update is the safest guess for a late click: it asks Yes/No before doing anything.
+            if (DateTime.UtcNow - _balloonShownAt >= TimeSpan.FromSeconds(60) && _availableUpdate != null) ConfirmAndInstall(_availableUpdate);
+            else (DateTime.UtcNow - _balloonShownAt < TimeSpan.FromSeconds(60) ? _balloonClick ?? ShowStatus : ShowStatus)();
+        };
 
         _uiTimer.Tick += (_, _) => UiTick();
         _uiTimer.Start();
@@ -688,18 +698,42 @@ internal sealed class BuddyContext : ApplicationContext
             UpdateInfo? update = await Updater.CheckAsync();
             if (update == null)
             {
-                if (manual) Notify("You're up to date", $"Desktop Buddy {Updater.CurrentVersion.ToString(3)} is the latest version.", ToolTipIcon.Info, critical: true);
+                if (manual)
+                    MessageBox.Show($"You're up to date: Desktop Buddy {Updater.CurrentVersion.ToString(3)} is the latest version.",
+                        "Desktop Buddy", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            _availableUpdate = update;
+            _installUpdateItem.Text = $"⬆ Install update {update.Version.ToString(3)}";
+            _installUpdateItem.Visible = true;
+
+            if (manual)
+            {
+                ConfirmAndInstall(update); // you asked: just ask yes/no, no notification to catch
                 return;
             }
             Notify($"Update available: {update.Version.ToString(3)}",
-                "Click to install it. Takes about 30 seconds; Desktop Buddy restarts by itself and keeps your settings.",
-                ToolTipIcon.Info, critical: manual, onClick: () => _ = InstallUpdate(update));
+                "Click here, or right-click the tray face > \"Install update\". Takes about 30 seconds and keeps your settings.",
+                ToolTipIcon.Info, onClick: () => ConfirmAndInstall(update));
         }
         catch (Exception ex)
         {
             Log.Error("Update check failed", ex);
-            if (manual) Notify("Couldn't check for updates", "GitHub couldn't be reached. Are you online?", ToolTipIcon.Warning, critical: true);
+            if (manual)
+                MessageBox.Show("Couldn't reach GitHub to check for updates. Are you online? (Details are in the log.)",
+                    "Desktop Buddy", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
+    }
+
+    private void ConfirmAndInstall(UpdateInfo update)
+    {
+        if (_updating) return;
+        var answer = MessageBox.Show(
+            $"Install Desktop Buddy {update.Version.ToString(3)} now? (You have {Updater.CurrentVersion.ToString(3)}.)\n\n" +
+            "It downloads, closes, swaps the files and starts again by itself in about 30 seconds. Your settings are kept.",
+            "Desktop Buddy update", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer == DialogResult.Yes) _ = InstallUpdate(update);
     }
 
     private async Task InstallUpdate(UpdateInfo update)
