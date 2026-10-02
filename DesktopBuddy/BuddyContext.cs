@@ -69,7 +69,7 @@ internal sealed class BuddyContext : ApplicationContext
             ShowDiagnosis = ShowDiagnosis,
             ShowAsk = ShowAsk,
             ShowExplain = (name, path, reasons) => new ExplainForm(_services!, name, path, reasons).Show(),
-            ShowApiKey = () => { using var d = new ApiKeyDialog(); d.ShowDialog(); },
+            ShowApiKey = () => { using var d = new ApiKeyDialog(settings); d.ShowDialog(); },
         };
 
         // Monitors run on a background thread; every alert hops to the UI thread here.

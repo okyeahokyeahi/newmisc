@@ -12,6 +12,11 @@ public sealed class Settings
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    /// <summary>Bumped when a default changes in a way existing settings files should pick up.</summary>
+    public int SettingsVersion { get; set; } // 0 when missing from an older file
+
+    private const int CurrentSettingsVersion = 2;
+
     // --- Resource hog alerts ---
     public int PollSeconds { get; set; } = 5;
     /// <summary>Percent of the whole CPU (all cores) an app must use to count as "heavy".</summary>
@@ -66,7 +71,8 @@ public sealed class Settings
     public bool CheckForUpdates { get; set; } = true;
 
     // --- AI (only used once you add an API key) ---
-    public string AiModel { get; set; } = "claude-opus-5-5";
+    /// <summary>Claude Haiku 4.5 is the cheapest and plenty for this app; pick another in the AI setup window.</summary>
+    public string AiModel { get; set; } = "claude-haiku-4-5";
     public double AiMonthlyBudgetUsd { get; set; } = 2.00;
     public int AiMaxCallsPerDay { get; set; } = 100;
 
@@ -82,6 +88,12 @@ public sealed class Settings
                 var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), JsonOptions);
                 if (loaded != null)
                 {
+                    if (loaded.SettingsVersion < CurrentSettingsVersion)
+                    {
+                        // v1.1 defaulted to Opus before a model picker existed; switch to the cheaper recommended model.
+                        if (loaded.AiModel == "claude-opus-5-5") loaded.AiModel = "claude-haiku-4-5";
+                        loaded.SettingsVersion = CurrentSettingsVersion;
+                    }
                     loaded.Save(); // writes back any settings added in newer versions
                     return loaded;
                 }
@@ -94,7 +106,7 @@ public sealed class Settings
             return new Settings(); // don't overwrite the broken file; let the user fix it
         }
 
-        var settings = new Settings();
+        var settings = new Settings { SettingsVersion = CurrentSettingsVersion };
         settings.Save();
         return settings;
     }
