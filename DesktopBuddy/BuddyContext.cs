@@ -152,6 +152,7 @@ internal sealed class BuddyContext : ApplicationContext
             else if (!settings.StartWithWindows) Autostart.Disable();
         };
         menu.Items.Add(startWithWindows);
+        menu.Items.Add(BuildTidyMenu());
         menu.Items.Add("Set API key…", null, (_, _) => _services.ShowApiKey());
         menu.Items.Add($"Check for updates (you have {Updater.CurrentVersion.ToString(3)})", null, async (_, _) => await CheckForUpdates(manual: true));
         menu.Items.Add("Edit settings (restart to apply)", null, (_, _) => OpenFile("notepad.exe", Settings.FilePath));
@@ -228,6 +229,14 @@ internal sealed class BuddyContext : ApplicationContext
                 if (_settings.WatchDefender) Safe("Defender monitor", _defender.Tick);
                 if (_settings.WatchHiddenStartup) Safe("hidden startup watcher", _hiddenStartup.Tick);
                 Safe("restart monitor", _restart.Tick);
+                if (DownloadsTidy.DueThisWeek(_settings) && !_games.InSession)
+                {
+                    int moved = 0;
+                    Safe("Downloads tidy", () => moved = DownloadsTidy.Run(_settings));
+                    if (moved > 0)
+                        _ui.Post(_ => Notify("Downloads tidied", $"Moved {moved} file(s) older than {_settings.TidyAfterDays} days into Downloads\\Older. Click to undo.",
+                            ToolTipIcon.Info, onClick: UndoTidy), null);
+                }
                 nextSlow = now.AddSeconds(60);
             }
             if (now >= nextCare)
@@ -664,6 +673,45 @@ internal sealed class BuddyContext : ApplicationContext
             Notify("Update failed", ex is InvalidOperationException ? ex.Message : "The download didn't work. Try again later (details in the log).",
                 ToolTipIcon.Error, critical: true);
         }
+    }
+
+    // ---------- Downloads tidy ----------
+    private ToolStripMenuItem BuildTidyMenu()
+    {
+        var root = new ToolStripMenuItem("Downloads tidy");
+        var weekly = new ToolStripMenuItem($"Tidy weekly (files older than {_settings.TidyAfterDays} days)") { Checked = _settings.TidyDownloads };
+        weekly.Click += (_, _) =>
+        {
+            if (!_settings.TidyDownloads)
+            {
+                var answer = MessageBox.Show(
+                    $"Once a week, files in Downloads older than {_settings.TidyAfterDays} days will be MOVED (never deleted) into " +
+                    "Downloads\\Older\\<year-month>. You can undo each tidy from this menu.\n\nTurn it on?",
+                    "Desktop Buddy", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (answer != DialogResult.Yes) return;
+            }
+            _settings.TidyDownloads = !_settings.TidyDownloads;
+            _settings.Save();
+            weekly.Checked = _settings.TidyDownloads;
+        };
+        root.DropDownItems.Add(weekly);
+        root.DropDownItems.Add("Tidy now", null, (_, _) => _ = Task.Run(() =>
+        {
+            int moved = DownloadsTidy.Run(_settings);
+            _ui.Post(_ => Notify("Downloads tidied", moved > 0 ? $"Moved {moved} old file(s) into Downloads\\Older. Click to undo." : "Nothing old enough to move.",
+                ToolTipIcon.Info, critical: true, onClick: moved > 0 ? UndoTidy : null), null);
+        }));
+        var undo = new ToolStripMenuItem("Undo last tidy", null, (_, _) => UndoTidy());
+        root.DropDownOpening += (_, _) => undo.Enabled = DownloadsTidy.CanUndo;
+        root.DropDownItems.Add(undo);
+        return root;
+    }
+
+    private void UndoTidy()
+    {
+        var (restored, skipped) = DownloadsTidy.UndoLast();
+        Notify("Tidy undone", $"Put {restored} file(s) back in Downloads." + (skipped > 0 ? $" {skipped} couldn't be (moved or renamed since)." : ""),
+            ToolTipIcon.Info, critical: true);
     }
 
     // ---------- Windows ----------

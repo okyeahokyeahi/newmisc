@@ -54,6 +54,10 @@ public sealed class Settings
     public double IdleGpuPercent { get; set; } = 30;
     public double IdleCpuPercent { get; set; } = 40;
 
+    // --- Downloads tidy (off until you turn it on) ---
+    public bool TidyDownloads { get; set; }
+    public int TidyAfterDays { get; set; } = 14;
+
     // --- Disk ---
     public int DiskFreeWarnGb { get; set; } = 20;
 

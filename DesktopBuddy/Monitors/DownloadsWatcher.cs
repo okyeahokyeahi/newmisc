@@ -80,6 +80,8 @@ public sealed class DownloadsWatcher : IDisposable
                 lastSize = size;
             }
             if (!ready) return;
+            // Files moved back in (e.g. undoing a Downloads tidy) keep their old creation time: not a new download.
+            if (File.GetCreationTime(path) < DateTime.Now.AddHours(-1)) return;
 
             _recent[path] = DateTime.UtcNow;
             Downloaded?.Invoke(Inspect(path));
