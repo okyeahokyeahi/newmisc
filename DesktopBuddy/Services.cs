@@ -23,4 +23,6 @@ internal sealed class BuddyServices
     public required Action<string, string?, IReadOnlyList<string>?> ShowExplain { get; init; }
     public required Action ShowApiKey { get; init; }
     public required Action ShowGameReady { get; init; }
+    public required Action ShowStatus { get; init; }
+    public required ReminderStore Reminders { get; init; }
 }

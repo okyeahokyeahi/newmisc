@@ -22,6 +22,11 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly GpuChoiceWatcher _gpuChoice;
     private readonly RefreshRateMonitor _refreshRate = new();
     private readonly RestartMonitor _restart;
+    private readonly ReminderStore _reminders = new();
+    private Hotkey? _hotkey;
+    private QuickPanel? _quickPanel;
+    private DateTime _quickPanelClosedAt;
+    private bool _gameJustEnded;
     private readonly System.Windows.Forms.Timer _slowUiTimer = new() { Interval = 10 * 60_000 };
     private readonly DownloadsWatcher? _downloads;
     private readonly BuddyServices _services;
@@ -80,6 +85,8 @@ internal sealed class BuddyContext : ApplicationContext
             ShowExplain = (name, path, reasons) => new ExplainForm(_services!, name, path, reasons).Show(),
             ShowApiKey = () => { using var d = new ApiKeyDialog(settings); d.ShowDialog(); },
             ShowGameReady = () => new GameReadyForm(_services!).Show(),
+            ShowStatus = ShowStatus,
+            Reminders = _reminders,
         };
 
         // Monitors run on a background thread; every alert hops to the UI thread here.
@@ -121,6 +128,7 @@ internal sealed class BuddyContext : ApplicationContext
         _pauseItem = new ToolStripMenuItem("Pause alerts for 1 hour", null, (_, _) => TogglePause());
         var menu = new ContextMenuStrip();
         menu.Items.Add(new ToolStripMenuItem("Open Desktop Buddy", null, (_, _) => ShowStatus()) { Font = new Font(menu.Font, FontStyle.Bold) });
+        menu.Items.Add("Quick panel (Ctrl+Alt+B)", null, (_, _) => ToggleQuickPanel());
         menu.Items.Add("Why is it slow / loud?", null, (_, _) => ShowDiagnosis());
         menu.Items.Add("Ask Buddy…", null, (_, _) => ShowAsk(null));
         menu.Items.Add("Get game-ready…", null, (_, _) => _services.ShowGameReady());
@@ -155,6 +163,8 @@ internal sealed class BuddyContext : ApplicationContext
         };
         SetMood(BuddyMood.Calm);
         _tray.DoubleClick += (_, _) => ShowStatus();
+        _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ToggleQuickPanel(); };
+        _hotkey = new Hotkey(Keys.B, ToggleQuickPanel);
         // Windows only says "a balloon was clicked", not which one. Older ones clicked later from the
         // notification centre could run the wrong action, so after a minute a click just opens the status window.
         _tray.BalloonTipClicked += (_, _) =>
@@ -268,6 +278,11 @@ internal sealed class BuddyContext : ApplicationContext
             : BuddyMood.Calm);
 
         _pauseItem.Text = Paused ? $"Resume alerts (paused until {_pausedUntil:HH:mm})" : "Pause alerts for 1 hour";
+
+        if (KeepAwake.ExpireIfDue()) Notify("Keep awake is off", "Your PC can sleep normally again.", ToolTipIcon.Info, critical: true);
+        foreach (Reminder due in _reminders.TakeDue(_games.InSession, _gameJustEnded))
+            Notify("Reminder", due.Text, ToolTipIcon.Info, critical: true);
+        _gameJustEnded = false;
         ShowNextSuspicious();
 
         // After a game: replay clickable alerts, spaced out so each can be read and clicked.
@@ -386,6 +401,7 @@ internal sealed class BuddyContext : ApplicationContext
 
     private void OnGameStopped()
     {
+        _gameJustEnded = true; // "after my game" reminders fire on the next UI tick
         if (_powerModeBeforeGame is Guid previous)
         {
             PowerMode.Set(previous);
@@ -641,6 +657,25 @@ internal sealed class BuddyContext : ApplicationContext
     }
 
     // ---------- Windows ----------
+    private void ToggleQuickPanel()
+    {
+        if (_quickPanel is { IsDisposed: false })
+        {
+            _quickPanel.Close();
+            return;
+        }
+        // Clicking the tray face while the panel is open first closes it (it loses focus); don't reopen it.
+        if (DateTime.UtcNow - _quickPanelClosedAt < TimeSpan.FromMilliseconds(400)) return;
+        _quickPanel = new QuickPanel(_services);
+        _quickPanel.FormClosed += (_, _) =>
+        {
+            _quickPanel = null;
+            _quickPanelClosedAt = DateTime.UtcNow;
+        };
+        _quickPanel.Show();
+        _quickPanel.Activate();
+    }
+
     private void ShowStatus()
     {
         if (_statusForm is { IsDisposed: false })
@@ -710,6 +745,8 @@ internal sealed class BuddyContext : ApplicationContext
         _uiTimer.Stop();
         _updateTimer.Stop();
         _slowUiTimer.Stop();
+        _hotkey?.Dispose();
+        if (KeepAwake.Until != null) KeepAwake.Set(null);
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _tray.Visible = false;
         bool loopStopped;
