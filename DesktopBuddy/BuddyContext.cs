@@ -25,6 +25,7 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly ReminderStore _reminders = new();
     private readonly LaptopCareMonitor _care = new();
     private Hotkey? _hotkey;
+    private Hotkey? _screenHotkey;
     private QuickPanel? _quickPanel;
     private DateTime _quickPanelClosedAt;
     private bool _gameJustEnded;
@@ -89,6 +90,7 @@ internal sealed class BuddyContext : ApplicationContext
             ShowGameReady = () => new GameReadyForm(_services!).Show(),
             ShowStatus = ShowStatus,
             Reminders = _reminders,
+            ShowScreenAsk = () => ScreenAsk.Start(_services!),
         };
 
         // Monitors run on a background thread; every alert hops to the UI thread here.
@@ -135,6 +137,7 @@ internal sealed class BuddyContext : ApplicationContext
         menu.Items.Add("Quick panel (Ctrl+Alt+B)", null, (_, _) => ToggleQuickPanel());
         menu.Items.Add("Why is it slow / loud?", null, (_, _) => ShowDiagnosis());
         menu.Items.Add("Ask Buddy…", null, (_, _) => ShowAsk(null));
+        menu.Items.Add("Ask about something on screen (Ctrl+Alt+S)", null, (_, _) => _services.ShowScreenAsk());
         menu.Items.Add("Get game-ready…", null, (_, _) => _services.ShowGameReady());
         menu.Items.Add(_pauseItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -170,6 +173,7 @@ internal sealed class BuddyContext : ApplicationContext
         _tray.DoubleClick += (_, _) => ShowStatus();
         _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ToggleQuickPanel(); };
         _hotkey = new Hotkey(Keys.B, ToggleQuickPanel);
+        _screenHotkey = new Hotkey(Keys.S, () => _services.ShowScreenAsk());
         // Windows only says "a balloon was clicked", not which one. Older ones clicked later from the
         // notification centre could run the wrong action, so after a minute a click just opens the status window.
         _tray.BalloonTipClicked += (_, _) =>
@@ -329,6 +333,7 @@ internal sealed class BuddyContext : ApplicationContext
     private void Notify(string title, string text, ToolTipIcon icon = ToolTipIcon.Warning, bool critical = false, Action? onClick = null)
     {
         Log.Info($"Alert: {title}: {text}");
+        if (title is not ("Scanning…" or "Done" or "Reminder")) _services.LastAlert = $"{title}: {text}";
         if (!critical)
         {
             if (Paused) return;
@@ -451,7 +456,7 @@ internal sealed class BuddyContext : ApplicationContext
                       (report.HeldAlerts.Count > 0 ? $" · {report.HeldAlerts.Count} alert(s) waiting" : "") +
                       ". Click for the report.";
         Notify($"Game over: {Diagnosis.FriendlyName(report.Game)}", text, throttled || report.HeldAlerts.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
-            onClick: () => new GameReportForm(report, _settings).Show());
+            onClick: () => new GameReportForm(report, _settings, ShowAsk).Show());
     }
 
     private void OnIdleHogs(IReadOnlyList<IdleHogFinding> findings)
@@ -817,6 +822,7 @@ internal sealed class BuddyContext : ApplicationContext
         _updateTimer.Stop();
         _slowUiTimer.Stop();
         _hotkey?.Dispose();
+        _screenHotkey?.Dispose();
         if (KeepAwake.Until != null) KeepAwake.Set(null);
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _tray.Visible = false;

@@ -96,7 +96,7 @@ public sealed class DownloadsWatcher : IDisposable
         }
     }
 
-    private static DownloadReport Inspect(string path)
+    public static DownloadReport Inspect(string path)
     {
         string name = Path.GetFileName(path);
         string ext = Path.GetExtension(path);

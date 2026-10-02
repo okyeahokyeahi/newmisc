@@ -54,7 +54,29 @@ internal sealed class AiClient(Settings settings)
     }
 
     /// <summary>Sends a conversation (alternating user/assistant, starting with user) and returns the reply text.</summary>
-    public async Task<string> Ask(string system, IReadOnlyList<(bool FromUser, string Text)> turns, CancellationToken cancel = default)
+    public Task<string> Ask(string system, IReadOnlyList<(bool FromUser, string Text)> turns, CancellationToken cancel = default) =>
+        Send(system, turns.Select(t => new BetaMessageParam
+        {
+            Role = t.FromUser ? Role.User : Role.Assistant,
+            Content = t.Text,
+        }).ToList(), cancel);
+
+    /// <summary>Asks about a picture (a screenshot region the user picked and previewed).</summary>
+    public Task<string> AskWithImage(string system, byte[] png, string question, CancellationToken cancel = default) =>
+        Send(system,
+        [
+            new BetaMessageParam
+            {
+                Role = Role.User,
+                Content = new List<BetaContentBlockParam>
+                {
+                    new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = Convert.ToBase64String(png), MediaType = MediaType.ImagePng } },
+                    new BetaTextBlockParam { Text = question },
+                },
+            },
+        ], cancel);
+
+    private async Task<string> Send(string system, List<BetaMessageParam> messages, CancellationToken cancel)
     {
         string key = CredentialStore.GetApiKey()
             ?? throw new AiUnavailableException("No API key yet. Tray menu > Set API key… to turn on AI answers.");
@@ -73,7 +95,7 @@ internal sealed class AiClient(Settings settings)
         }
         try
         {
-            return await AskCore(key, system, turns, cancel);
+            return await AskCore(key, system, messages, cancel);
         }
         finally
         {
@@ -83,7 +105,7 @@ internal sealed class AiClient(Settings settings)
 
     private static int _inFlight;
 
-    private async Task<string> AskCore(string key, string system, IReadOnlyList<(bool FromUser, string Text)> turns, CancellationToken cancel)
+    private async Task<string> AskCore(string key, string system, List<BetaMessageParam> messages, CancellationToken cancel)
     {
         var client = new AnthropicClient { ApiKey = key, Timeout = TimeSpan.FromSeconds(90), MaxRetries = 1 };
         var request = new MessageCreateParams
@@ -91,11 +113,7 @@ internal sealed class AiClient(Settings settings)
             Model = settings.AiModel,
             MaxTokens = 2000,
             System = system,
-            Messages = turns.Select(t => new BetaMessageParam
-            {
-                Role = t.FromUser ? Role.User : Role.Assistant,
-                Content = t.Text,
-            }).ToList(),
+            Messages = messages,
         };
         if (!settings.AiModel.StartsWith("claude-haiku", StringComparison.OrdinalIgnoreCase))
             request = request with { OutputConfig = new BetaOutputConfig { Effort = Effort.Low } }; // short chatty answers

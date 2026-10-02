@@ -32,7 +32,7 @@ internal sealed class QuickPanel : Form
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = SystemColors.Window;
-        ClientSize = new Size(380, 600);
+        ClientSize = new Size(380, 660);
         KeyPreview = true;
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) Close(); };
         Deactivate += (_, _) => Close();
@@ -51,6 +51,8 @@ internal sealed class QuickPanel : Form
         buttons.Controls.Add(Wide("Why slow / loud?", () => { Close(); _s.ShowDiagnosis(); }));
         buttons.Controls.Add(Wide("Ask Buddy", () => { Close(); _s.ShowAsk(null); }));
         buttons.Controls.Add(Wide("Full window", () => { Close(); _s.ShowStatus(); }));
+        buttons.Controls.Add(Wide("Ask about screen", () => { Close(); _s.ShowScreenAsk(); }));
+        buttons.Controls.Add(Wide("AI setup", () => { Close(); _s.ShowApiKey(); }));
         root.Controls.Add(buttons);
 
         root.Controls.Add(Heading("Keep awake"));
@@ -67,6 +69,7 @@ internal sealed class QuickPanel : Form
         var dlMenu = new ContextMenuStrip();
         dlMenu.Items.Add("Open", null, (_, _) => ShowDownload(open: true));
         dlMenu.Items.Add("Show in folder", null, (_, _) => ShowDownload(open: false));
+        dlMenu.Items.Add("Is this safe? (ask AI)", null, (_, _) => AskAboutDownload());
         _downloads.ContextMenuStrip = dlMenu;
         root.Controls.Add(_downloads);
 
@@ -198,6 +201,18 @@ internal sealed class QuickPanel : Form
         {
             Log.Error($"Opening {path} failed", ex);
         }
+    }
+
+    private void AskAboutDownload()
+    {
+        int i = _downloads.SelectedIndex;
+        if (i < 0 || i >= _downloadPaths.Count) return;
+        DownloadReport report = DownloadsWatcher.Inspect(_downloadPaths[i]);
+        string source = report.FromHost != null ? $" from {report.FromHost}" + (report.ViaHost != null ? $" (linked from {report.ViaHost})" : "") : "";
+        string flags = report.Warnings.Count > 0 ? $" Desktop Buddy noticed: {string.Join(" ", report.Warnings)}" : "";
+        Close();
+        _s.ShowAsk($"I downloaded a file called \"{report.FileName}\"{source}.{flags} Does this look like a scam or something risky? " +
+                   "What should I check before opening it?");
     }
 
     private void AddReminder()

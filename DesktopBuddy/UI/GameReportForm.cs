@@ -5,7 +5,7 @@ namespace DesktopBuddy.UI;
 /// <summary>The after-game summary.</summary>
 internal sealed class GameReportForm : Form
 {
-    public GameReportForm(GameSessionReport r, Settings settings)
+    public GameReportForm(GameSessionReport r, Settings settings, Action<string?> ask)
     {
         Ui.Setup(this, $"Game report: {Diagnosis.FriendlyName(r.Game)}", 500, 420);
         var text = Ui.ReadOnlyText();
@@ -46,10 +46,15 @@ internal sealed class GameReportForm : Form
 
         var close = Ui.Button("Close", (_, _) => Close());
         CancelButton = close;
+        var askButton = Ui.Button("Ask Buddy about this session", (_, _) => ask(
+            $"Here's my last game session: {Diagnosis.FriendlyName(r.Game)} for {Duration(r.Length)}, peak CPU {Format.Temp(r.PeakCpuC)}, " +
+            $"peak GPU {Format.Temp(r.PeakGpuC)}, peak RAM {r.PeakRamPercent}%, heat slowdown CPU {Duration(r.CpuHeatSlowdown)} / GPU {Duration(r.GpuHeatSlowdown)}." +
+            (r.Network is { } n ? $" Connection: {n.Verdict()}" : "") +
+            " What's the one thing I should change for smoother games?"));
         var padded = new Panel { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 16, 4) };
         padded.Controls.Add(text);
         Controls.Add(padded);
-        Controls.Add(Ui.ButtonRow(close));
+        Controls.Add(Ui.ButtonRow(close, askButton));
     }
 
     private static string Duration(TimeSpan t) =>
