@@ -185,8 +185,9 @@ internal sealed class WeeklyReportForm : Form
             sections.Add(new Section("Battery",
                 $"Holds {battery.FullWh:0} Wh of its original {battery.DesignedWh:0} Wh ({pct:0}%)." +
                 (pct < 80
-                    ? " It's worn. Since the laptop is always plugged in, turn on the battery charge limit (80%) in NitroSense or Acer Care Center if yours has it: sitting at 100% wears it fastest."
-                    : " Fine. Being plugged in all the time wears it slowly; an 80% charge limit (NitroSense or Acer Care Center, if offered) keeps it that way."),
+                    ? " It's worn. That only matters when you use the laptop unplugged; plugged in, it runs the same. " +
+                      "If it ever drops below about 50% or the case starts to bulge, get the battery replaced."
+                    : " Fine. Staying plugged in at 100% wears it slowly; that's normal for this model (Acer offers no working charge limit on it)."),
                 pct < 70 ? Ui.Amber : null));
         }
 

@@ -30,6 +30,12 @@ Acer Nitro AN515-57 but runs on any Windows 10/11 PC.
 | **Screen refresh check** | Notices a screen stuck at 60 Hz when it can do more (e.g. 144 Hz) and switches it after you confirm. |
 | **Restart reminder** | If a Windows update has waited 3+ days for a restart: one reminder a day, never during a game. |
 | **Laptop care** | Occasional tips: "runs ~7°C hotter in Roblox than in March, the vents may be dusty", an old NVIDIA driver, and a slow Windows startup with what Windows blamed. The status window shows your last startup time. |
+| **Roblox kick explainer** | When Roblox disconnects you, the game report says why in plain English (error 267, 277, 279…) and quotes the game's kick message. Unknown codes get an *Ask Buddy what it means* button. |
+| **Studio crash help** | If Roblox Studio closes unexpectedly, a notification points to your newest recovery/autosave file and Buddy keeps a backup copy in `%AppData%\DesktopBuddy\StudioBackups` (newest 20). |
+| **Weekly health report** | Once a week (or tray menu → *Weekly health report*): this week vs last for RAM, heat slowdown, games played, Windows startup time, free disk space, battery wear, and how much space game clips take. Optional AI summary. |
+| **Sound switch** | **Ctrl+Alt+A** moves sound to your next output (headset ↔ speakers), for games, music and Discord calls. |
+| **Late-night nudge** (off by default) | After a game that ends late, the game-over notification mentions the time. |
+| **Settings window** | Tray menu → *Settings…*: every option in tabs (General, Alerts, Security, Games, AI), no file editing. |
 | **Downloads tidy** (off by default) | Weekly, moves files older than 14 days into `Downloads\Older\<year-month>`. Never deletes, and every tidy can be undone (tray menu → *Downloads tidy*). |
 
 Right-click the tray icon for the menu, or double-click it for the live status window.
@@ -73,7 +79,10 @@ This is a fan homage. The visuals are original and no assets from the show are i
 - **What's sent:** program names and numbers only (temperatures, RAM, the busiest apps), plus a screenshot only when you
   pick one yourself and press Ask. Never window titles, files, the clipboard or your username. Click *What gets sent?* in the
   chat window to see it. Every AI question starts with you pressing a button; nothing is sent in the background.
-- **What it can do:** only answer. The AI can't click, close or change anything.
+- **What it can do:** in Ask Buddy you can say things like "close Chrome", "pause alerts for an hour", "keep it awake for 3 hours",
+  "open Sound settings" or "empty the recycle bin". Only those six kinds of action exist, and **every one asks you Yes/No
+  first**. It refuses to close games, Discord, Roblox Studio or Windows parts. Turn it off with `AiActions` (Settings → AI).
+- **Weekly report summary:** *Sum it up (AI)* in the weekly report sends the report's text (numbers only) for a 3-point summary.
 
 ## What it does NOT do
 - **No fan control.** NitroSense has no public API, and the undocumented route is risky. Use NitroSense's Max fan when it warns you.
@@ -99,7 +108,7 @@ its SHA-256 checksum, swaps the files and restarts itself. Settings, the allow l
 You can also check by hand: tray menu → *Check for updates*. Turn it off with `CheckForUpdates: false`.
 
 ## Settings
-Tray menu → *Edit settings* opens `%AppData%\DesktopBuddy\settings.json`. Restart the app after saving.
+Tray menu → *Settings…* opens the Settings window. Everything is also stored in `%AppData%\DesktopBuddy\settings.json`.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -125,6 +134,11 @@ Tray menu → *Edit settings* opens `%AppData%\DesktopBuddy\settings.json`. Rest
 | `BestPerformanceDuringGames` | true | Best performance power mode during games |
 | `WatchGraphicsChip` / `ForceRtxApps` | true / [] | Wrong-chip check, and apps you switched to the RTX |
 | `TidyDownloads` / `TidyAfterDays` | false / 14 | Weekly Downloads tidy |
+| `RobloxKickExplainer` / `StudioCrashHelp` | true / true | Roblox disconnect reasons, Studio crash help |
+| `WeeklyReport` / `AiWeeklySummary` | true / true | Weekly report notice, and its AI summary button |
+| `AudioHotkey` | true | Ctrl+Alt+A sound switch |
+| `LateNightNudge` / `LateNightHour` | false / 23 | Late-night mention after games, and when "late" starts |
+| `AiActions` | true | Let Ask Buddy do the six confirmed actions |
 
 A log is kept at `%AppData%\DesktopBuddy\log.txt` (tray menu → *Open log folder*).
 

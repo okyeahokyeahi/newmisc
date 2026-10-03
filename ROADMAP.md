@@ -28,28 +28,25 @@
   - Boot-time tracker
   - AI model picker (Haiku default), plus screenshot, alert, session and download questions
 
-## Saved for later (from the second idea round)
-- **Headset/speakers hotkey.** Ctrl+Alt+A switches the default sound and mic device. It needs the undocumented
-  `IPolicyConfig` COM interface (the one SoundSwitch uses).
-- **"Why did Roblox kick me?"** Read the newest `%LocalAppData%\Roblox\logs` file after RobloxPlayerBeta exits and translate
-  disconnect codes (267, 268, 277, 279, 529…) into plain English for the game report. The log format is unofficial, so match loosely.
-- **Studio crash-recovery pointer.** After an unexpected Studio exit, point to the newest AutoSaves file and optionally keep extra copies.
-- **Buddy settings window.** Name, face style, quiet hours and sound, instead of editing settings.json.
-- **Late-night nudge.** One quiet message after a late game. Opt-in.
-- **Game clip storage.** Add space used by Game Bar / NVIDIA / Discord clips to the disk warning.
+- **v1.3:**
+  - Settings window
+  - Roblox kick explainer and Studio crash help
+  - Plain-English actions in Ask Buddy (six actions, each behind Yes/No)
+  - Weekly health report with battery wear and game-clip storage (clip size also in the low-disk warning)
+  - Ctrl+Alt+A headset/speakers switch
+  - Late-night nudge (opt-in)
+  - "What is this?" from hidden-startup alerts
+  - MAGI theme with optional AI voices
 
-## Saved for later (picked from the 15-idea list)
+## Saved for later
 - **#12 Roblox Studio plugin scanner.** Scan `%LocalAppData%\Roblox\Plugins` for patterns backdoored free plugins use
   (`require(<number>)`, `getfenv`, `loadstring`). Results shown as "maybe", since it's a best guess.
-- **#13 Daily/weekly health card.** For example "RAM over 90% for 3h today (Chrome + Studio), 1 new startup item, restart pending".
-  Works locally; the AI can write a summary once there's a key.
-- **#14 Plain-English actions.** "close Chrome", "pause alerts till 9", each behind a Yes/No confirmation and limited to about
-  6 safe actions. Riskiest feature, because the app runs as admin.
-- **#15 Battery health card.** Shows wear, e.g. "82% of original capacity". No charge limit: Acer removed or broke it on the
-  AN515-57, and forcing it is risky.
+- **MAGI-style tray icon.** Offered, not built yet.
+- **Mic switching on Ctrl+Alt+A.** Today it switches output only.
 
 ## Skipped on purpose
 - **#3 "Gaming on battery" warning.** The laptop is always plugged in. (The power-brake warning in #7 still covers a weak charger.)
+- **Battery charge limit.** Acer removed or broke it on the AN515-57, and forcing it is risky. The weekly report shows wear instead.
 - **Automatic NitroSense fan control.** Undocumented, model-specific commands that conflict with NitroSense. Use NitroSense's Max fan.
 - **RAM "boosters"/cleaners.** Snake oil; they make stutter worse.
 - **A general "every internet connection" monitor.** Constant noise with nothing to act on.
