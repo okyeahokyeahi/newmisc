@@ -53,7 +53,6 @@ internal sealed class SettingsForm : Form
         add(Check("MAGI sounds", () => _settings.MagiSounds, v => _settings.MagiSounds = v));
         add(Number("MAGI volume (%)", 0, 150, () => (decimal)(_settings.MagiVolume * 100), v => _settings.MagiVolume = (double)v / 100));
         add(Heading("Extras"));
-        add(Check("Ctrl+Alt+A switches headset / speakers ↻", () => _settings.AudioHotkey, v => _settings.AudioHotkey = v));
         add(Check("Weekly health report", () => _settings.WeeklyReport, v => _settings.WeeklyReport = v));
         add(Check("Late-night nudge after games", () => _settings.LateNightNudge, v => _settings.LateNightNudge = v));
         add(Number("…counts as late from (24-hour clock, e.g. 23)", 0, 23, () => _settings.LateNightHour, v => _settings.LateNightHour = (int)v));
@@ -120,6 +119,7 @@ internal sealed class SettingsForm : Form
         add(Number("Monthly budget (US$)", 0, 100, () => (decimal)_settings.AiMonthlyBudgetUsd, v => _settings.AiMonthlyBudgetUsd = (double)v, decimals: 2));
         add(Number("Max questions per day", 1, 1000, () => _settings.AiMaxCallsPerDay, v => _settings.AiMaxCallsPerDay = (int)v));
         add(Check("Ask Buddy can offer actions (each asks you first)", () => _settings.AiActions, v => _settings.AiActions = v));
+        add(Check("…put them to a MAGI vote first (MAGI theme only)", () => _settings.MagiVotesOnAiActions, v => _settings.MagiVotesOnAiActions = v));
         add(Check("AI summary in the weekly report", () => _settings.AiWeeklySummary, v => _settings.AiWeeklySummary = v));
         add(Check("AI voices for the MAGI cores", () => _settings.MagiAiVoices, v => _settings.MagiAiVoices = v));
         return page;

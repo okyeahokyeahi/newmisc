@@ -30,6 +30,8 @@ internal sealed class BuddyServices
     public required Action ShowSettings { get; init; }
     public required Action ShowWeeklyReport { get; init; }
     public required Action<int> PauseAlerts { get; init; }
+    /// <summary>Shows a MAGI vote and waits until it's closed (used for Ask Buddy's actions).</summary>
+    public required Action<Magi.MagiCase> ShowMagiModal { get; init; }
 
     /// <summary>The most recent notification ("title: text"), so you can ask Buddy what it meant.</summary>
     public string? LastAlert { get; set; }

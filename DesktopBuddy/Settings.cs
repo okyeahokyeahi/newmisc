@@ -99,8 +99,6 @@ public sealed class Settings
     public bool MagiAiVoices { get; set; } = true;
 
     // --- Extras ---
-    /// <summary>Ctrl+Alt+A switches the default sound output (and mic) between your devices.</summary>
-    public bool AudioHotkey { get; set; } = true;
     /// <summary>After Roblox Studio closes unexpectedly, point to the recovery copy and keep extra backups.</summary>
     public bool StudioCrashHelp { get; set; } = true;
     /// <summary>Explain Roblox disconnects ("Error 277") in the game report.</summary>
@@ -117,6 +115,8 @@ public sealed class Settings
     public int AiMaxCallsPerDay { get; set; } = 100;
     /// <summary>Let Ask Buddy offer actions ("close Chrome"); every action still asks you Yes/No.</summary>
     public bool AiActions { get; set; } = true;
+    /// <summary>With the MAGI theme on, Ask Buddy's actions go to a MAGI vote (the three cores debate) before you decide.</summary>
+    public bool MagiVotesOnAiActions { get; set; } = true;
     /// <summary>Add a short AI-written summary to the weekly report.</summary>
     public bool AiWeeklySummary { get; set; } = true;
 

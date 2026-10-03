@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using Anthropic.Models.Beta.Messages;
 using DesktopBuddy.Knowledge;
+using DesktopBuddy.Magi;
+using DesktopBuddy.Monitors;
 using DesktopBuddy.Native;
 
 namespace DesktopBuddy.Ai;
@@ -88,7 +90,11 @@ internal sealed class BuddyActions(BuddyServices s, Action<int> pauseAlerts)
             return "✖ I won't close Roblox Studio for you: save your place first, then close it yourself.";
         if (!AppCloser.HasWindow(match)) return $"✖ {Diagnosis.FriendlyName(match)} has no window to close (it's running in the background).";
 
-        if (!Confirm(owner, $"Close {Diagnosis.Label(match)}?\n\nIt closes normally, like clicking its X, so it can save first.")) return "Cancelled: nothing was closed.";
+        AppUsage? usage = s.Resources.Latest?.AllApps.FirstOrDefault(a => a.Name.Equals(match, StringComparison.OrdinalIgnoreCase));
+        string label = Diagnosis.FriendlyName(match);
+        if (!Decide(owner, $"Close {Diagnosis.Label(match)}?\n\nIt closes normally, like clicking its X, so it can save first.",
+                (yes, no) => MagiCases.CloseApp(lower, label, usage, s.Resources.Latest?.RamPercent ?? 0, yes, no)))
+            return "Cancelled: nothing was closed.";
         AppCloser.CloseAllWindows([match]);
         Log.Info($"AI action: closed {match}");
         return $"✔ Asked {Diagnosis.FriendlyName(match)} to close.";
@@ -97,7 +103,8 @@ internal sealed class BuddyActions(BuddyServices s, Action<int> pauseAlerts)
     private string PauseAlerts(IWin32Window owner, int? minutes)
     {
         int m = Math.Clamp(minutes ?? 60, 5, 720);
-        if (!Confirm(owner, $"Pause Desktop Buddy's alerts for {m} minutes?\n\nSecurity warnings still show.")) return "Cancelled.";
+        if (!Decide(owner, $"Pause Desktop Buddy's alerts for {m} minutes?\n\nSecurity warnings still show.",
+                (yes, no) => MagiCases.PauseAlerts(m, s.Temps.Latest?.CpuC, s.Settings.CpuTempWarnC, yes, no))) return "Cancelled.";
         pauseAlerts(m);
         return $"✔ Alerts paused until {DateTime.Now.AddMinutes(m):HH:mm}.";
     }
@@ -124,7 +131,7 @@ internal sealed class BuddyActions(BuddyServices s, Action<int> pauseAlerts)
         return $"✔ Opened {label}.";
     }
 
-    private static string SetAwake(IWin32Window owner, string? duration)
+    private string SetAwake(IWin32Window owner, string? duration)
     {
         (TimeSpan? span, string text)? choice = duration switch
         {
@@ -135,7 +142,7 @@ internal sealed class BuddyActions(BuddyServices s, Action<int> pauseAlerts)
             _ => null,
         };
         if (choice is not var (span, text)) return "✖ Unknown duration.";
-        if (!Confirm(owner, $"{char.ToUpper(text[0])}{text[1..]}?")) return "Cancelled.";
+        if (!Decide(owner, $"{char.ToUpper(text[0])}{text[1..]}?", (yes, no) => MagiCases.KeepAwake(span, text, yes, no))) return "Cancelled.";
         KeepAwake.Set(span);
         return $"✔ Done: {text}.";
     }
@@ -159,15 +166,41 @@ internal sealed class BuddyActions(BuddyServices s, Action<int> pauseAlerts)
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern int SHEmptyRecycleBin(IntPtr hwnd, string? rootPath, uint flags);
 
-    private static string EmptyRecycleBin(IWin32Window owner)
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SHQUERYRBINFO
     {
-        if (!Confirm(owner, "Permanently empty the Recycle Bin?\n\nFiles in it can't be brought back afterwards.")) return "Cancelled.";
+        public int cbSize;
+        public long i64Size;
+        public long i64NumItems;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHQueryRecycleBin(string? rootPath, ref SHQUERYRBINFO info);
+
+    private string EmptyRecycleBin(IWin32Window owner)
+    {
+        var info = new SHQUERYRBINFO { cbSize = Marshal.SizeOf<SHQUERYRBINFO>() };
+        bool known = SHQueryRecycleBin(null, ref info) == 0;
+        if (known && info.i64NumItems == 0) return "✔ The Recycle Bin is already empty.";
+        string size = known ? $" ({info.i64NumItems} item(s), {Format.Bytes(info.i64Size)})" : "";
+        if (!Decide(owner, $"Permanently empty the Recycle Bin{size}?\n\nFiles in it can't be brought back afterwards.",
+                known ? (yes, no) => MagiCases.EmptyRecycleBin(info.i64Size, info.i64NumItems, yes, no) : null)) return "Cancelled.";
         const uint SHERB_NOCONFIRMATION = 0x1;
         int hr = SHEmptyRecycleBin(IntPtr.Zero, null, SHERB_NOCONFIRMATION);
         return hr == 0 || hr == unchecked((int)0x8000FFFF) ? "✔ Recycle Bin emptied." : $"✖ Windows couldn't empty it (code {hr:X}).";
     }
 
     // ---------- helpers ----------
+    /// <summary>MAGI theme (and the setting) on: the three cores vote first, then you pick. Otherwise a plain Yes/No.</summary>
+    private bool Decide(IWin32Window owner, string question, Func<Action, Action, MagiCase>? vote)
+    {
+        if (vote == null || !s.Settings.MagiVotesOnAiActions || !s.Settings.Theme.Equals("magi", StringComparison.OrdinalIgnoreCase))
+            return Confirm(owner, question);
+        bool approved = false;
+        s.ShowMagiModal(vote(() => approved = true, () => { }));
+        return approved; // closing the screen without choosing = no
+    }
+
     private static bool Confirm(IWin32Window owner, string question) =>
         MessageBox.Show(owner, question, "Desktop Buddy: confirm action", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
             MessageBoxDefaultButton.Button2) == DialogResult.Yes; // "No" by default: a stray Enter mid-typing shouldn't confirm

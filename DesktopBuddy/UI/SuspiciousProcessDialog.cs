@@ -3,9 +3,9 @@ using DesktopBuddy.Monitors;
 
 namespace DesktopBuddy.UI;
 
-public enum SuspiciousChoice { Ignore, Kill, AlwaysAllow }
+public enum SuspiciousChoice { Ignore, Kill, AlwaysAllow, Freeze }
 
-/// <summary>"Something looks off about this program": you choose Kill / Ignore / Always allow.</summary>
+/// <summary>"Something looks off about this program": you choose Kill / Freeze / Ignore / Always allow.</summary>
 internal sealed class SuspiciousProcessDialog : Form
 {
     public SuspiciousChoice Choice { get; private set; } = SuspiciousChoice.Ignore;
@@ -22,7 +22,7 @@ internal sealed class SuspiciousProcessDialog : Form
         Font = new Font("Segoe UI", 9.5f);
         AutoScaleDimensions = new SizeF(96F, 96F); // designed at 100%; WinForms scales up for 125%+
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(540, 320);
+        ClientSize = new Size(640, 330);
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 5 };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -52,7 +52,8 @@ internal sealed class SuspiciousProcessDialog : Form
         layout.Controls.Add(new Label
         {
             Text = string.Join("\n", item.Reasons.Select(r => "• " + r)) +
-                   "\n\nNot sure? Click \"Show file\" and search the name online before killing it. " +
+                   "\n\nNot sure? \"Freeze\" pauses it without closing it, so it can't do anything while you check " +
+                   "(\"What is this?\" or search the name online). Resume or end it later from the tray menu > Frozen programs. " +
                    "\"Ignore\" hides it until Desktop Buddy restarts.",
             Dock = DockStyle.Fill,
         });
@@ -63,6 +64,7 @@ internal sealed class SuspiciousProcessDialog : Form
         buttons.Controls.Add(ignore);
         buttons.Controls.Add(MakeButton("Always allow", SuspiciousChoice.AlwaysAllow));
         buttons.Controls.Add(MakeButton("Kill it", SuspiciousChoice.Kill));
+        buttons.Controls.Add(MakeButton("Freeze", SuspiciousChoice.Freeze));
         var show = new Button { Text = "Show file", AutoSize = true };
         show.Click += (_, _) => Process.Start("explorer.exe", $"/select,\"{item.ExePath}\"");
         buttons.Controls.Add(show);

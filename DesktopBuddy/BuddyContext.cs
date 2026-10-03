@@ -32,7 +32,6 @@ internal sealed class BuddyContext : ApplicationContext
     private bool MagiTheme => _settings.Theme.Equals("magi", StringComparison.OrdinalIgnoreCase);
     private Hotkey? _hotkey;
     private Hotkey? _screenHotkey;
-    private Hotkey? _audioHotkey;
     private QuickPanel? _quickPanel;
     private DateTime _quickPanelClosedAt;
     private bool _gameJustEnded;
@@ -118,6 +117,7 @@ internal sealed class BuddyContext : ApplicationContext
             ShowScreenAsk = () => ScreenAsk.Start(_services!),
             ShowSettings = ShowSettings,
             ShowWeeklyReport = ShowWeeklyReport,
+            ShowMagiModal = ShowMagiModal,
             PauseAlerts = minutes => { _pausedUntil = DateTime.Now.AddMinutes(minutes); UiTick(); },
         };
 
@@ -178,6 +178,9 @@ internal sealed class BuddyContext : ApplicationContext
         menu.Items.Add("Get game-ready…", null, (_, _) => _services.ShowGameReady());
         menu.Items.Add("Weekly health report", null, (_, _) => ShowWeeklyReport());
         menu.Items.Add(_pauseItem);
+        var frozenMenu = new ToolStripMenuItem("Frozen programs") { Visible = false };
+        menu.Items.Add(frozenMenu);
+        menu.Opening += (_, _) => FillFrozenMenu(frozenMenu);
         menu.Items.Add(new ToolStripSeparator());
         var startWithWindows = _startWithWindowsItem = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = settings.StartWithWindows };
         startWithWindows.Click += (_, _) =>
@@ -217,7 +220,6 @@ internal sealed class BuddyContext : ApplicationContext
         _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ToggleQuickPanel(); };
         _hotkey = new Hotkey(Keys.B, ToggleQuickPanel);
         _screenHotkey = new Hotkey(Keys.S, () => _services.ShowScreenAsk());
-        SyncAudioHotkey();
         // Windows only says "a balloon was clicked", not which one. Older ones clicked later from the
         // notification centre could run the wrong action, so after a minute a click just opens the status window.
         _tray.BalloonTipClicked += (_, _) =>
@@ -512,6 +514,23 @@ internal sealed class BuddyContext : ApplicationContext
         form.Activate();
     }
 
+    /// <summary>A vote you must answer now (Ask Buddy is waiting on it). Other MAGI screens queue behind it.</summary>
+    private void ShowMagiModal(MagiCase vote)
+    {
+        bool wasOpen = _magiOpen;
+        _magiOpen = true;
+        try
+        {
+            using MagiForm form = CreateMagiForm(vote);
+            form.ShowDialog();
+        }
+        finally
+        {
+            _magiOpen = wasOpen;
+            if (!_magiOpen && _magiQueue.Count > 0) _ui.Post(_ => ShowMagi(_magiQueue.Dequeue()), null);
+        }
+    }
+
     private ToolStripMenuItem BuildThemeMenu()
     {
         var root = new ToolStripMenuItem("Look && sounds");
@@ -696,32 +715,6 @@ internal sealed class BuddyContext : ApplicationContext
         return from >= 12 ? hour >= from || hour < 5 : hour >= from && hour < 5;
     }
 
-    private void SyncAudioHotkey()
-    {
-        if (_settings.AudioHotkey && _audioHotkey == null) _audioHotkey = new Hotkey(Keys.A, SwitchAudioOutput);
-        else if (!_settings.AudioHotkey && _audioHotkey != null)
-        {
-            _audioHotkey.Dispose();
-            _audioHotkey = null;
-        }
-    }
-
-    private void SwitchAudioOutput()
-    {
-        try
-        {
-            string? now = AudioSwitch.Next();
-            Notify(now != null ? "Sound output switched" : "Only one sound output",
-                now != null ? $"Sound now plays on: {now}" : "Plug in your headset (or turn on the speakers) and press Ctrl+Alt+A again.",
-                ToolTipIcon.Info, critical: true);
-        }
-        catch (Exception ex)
-        {
-            Log.Error("Switching sound output failed", ex);
-            Notify("Couldn't switch sound output", "Use the speaker icon on the taskbar instead (details are in the log).", ToolTipIcon.Info, critical: true);
-        }
-    }
-
     private void OnIdleHogs(IReadOnlyList<IdleHogFinding> findings)
     {
         IdleHogFinding top = findings.OrderByDescending(f => f.Duration).First();
@@ -844,6 +837,7 @@ internal sealed class BuddyContext : ApplicationContext
                     AppUsage? usage = _resources.Latest?.AllApps.FirstOrDefault(a => a.Name.Equals(appName, StringComparison.OrdinalIgnoreCase));
                     MagiCase vote = MagiCases.Suspicious(item, usage, HasWindow(item.ExePath),
                         terminate: () => magiChoice = SuspiciousChoice.Kill,
+                        freeze: () => magiChoice = SuspiciousChoice.Freeze,
                         explain: () =>
                         {
                             using var explainForm = new ExplainForm(_services, appName, item.ExePath, item.Reasons);
@@ -877,6 +871,42 @@ internal sealed class BuddyContext : ApplicationContext
         }
     }
 
+    private void FillFrozenMenu(ToolStripMenuItem root)
+    {
+        IReadOnlyList<ProcessFreezer.Entry> frozen;
+        try
+        {
+            frozen = ProcessFreezer.List();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Listing frozen programs failed", ex);
+            frozen = [];
+        }
+        root.DropDownItems.Clear();
+        root.Visible = frozen.Count > 0;
+        root.Text = $"Frozen programs ({frozen.Count})";
+        foreach (ProcessFreezer.Entry e in frozen)
+        {
+            var item = new ToolStripMenuItem($"{e.Name}  (frozen since {e.Since:HH:mm})");
+            item.DropDownItems.Add("Resume it", null, (_, _) =>
+            {
+                int n = ProcessFreezer.Resume(e.ExePath);
+                Notify("Resumed", $"{e.Name} is running again ({n} cop{(n == 1 ? "y" : "ies")}).", ToolTipIcon.Info, critical: true);
+            });
+            item.DropDownItems.Add("End it (kill)", null, (_, _) =>
+            {
+                int n = ProcessFreezer.Kill(e.ExePath);
+                _scanner.ForgetReport(e.ExePath); // if it comes back, ask again
+                Notify("Ended", $"{e.Name} was closed ({n} cop{(n == 1 ? "y" : "ies")}).", ToolTipIcon.Info, critical: true);
+            });
+            item.DropDownItems.Add("What is this?", null, (_, _) =>
+                new ExplainForm(_services, Path.GetFileNameWithoutExtension(e.ExePath), e.ExePath, ["You froze it after a suspicious-program warning."]).Show());
+            item.DropDownItems.Add("Show file", null, (_, _) => Process.Start("explorer.exe", $"/select,\"{e.ExePath}\""));
+            root.DropDownItems.Add(item);
+        }
+    }
+
     private void HandleChoice(SuspiciousProcess item, SuspiciousChoice choice)
     {
         Log.Info($"User chose {choice} for {item.ExePath} (pid {item.Pid})");
@@ -907,6 +937,25 @@ internal sealed class BuddyContext : ApplicationContext
                     MessageBox.Show($"Couldn't close {item.Name}: {failures[0]}", "Desktop Buddy",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 break;
+
+            case SuspiciousChoice.Freeze:
+                List<Process> toFreeze = RunningCopies(item.ExePath);
+                try
+                {
+                    var (frozen, error) = ProcessFreezer.Freeze(item.ExePath, item.Name, toFreeze);
+                    if (frozen > 0)
+                        Notify("Frozen", $"{item.Name} is paused and can't do anything ({frozen} cop{(frozen == 1 ? "y" : "ies")}). " +
+                            "Its window may say \"Not responding\"; that's expected. Resume or end it from the tray menu > Frozen programs. " +
+                            "Restarting the PC also unfreezes it.", ToolTipIcon.Info, critical: true);
+                    else
+                        MessageBox.Show($"Couldn't freeze {item.Name}: {error ?? "it already closed."}", "Desktop Buddy",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                finally
+                {
+                    toFreeze.ForEach(p => p.Dispose());
+                }
+                break; // still reported, so the scanner doesn't ask again while it's frozen
 
             case SuspiciousChoice.AlwaysAllow:
                 _scanner.Allow(item.ExePath);
@@ -1060,7 +1109,6 @@ internal sealed class BuddyContext : ApplicationContext
     private void AfterSettingsSaved()
     {
         _ = Task.Run(() => Autostart.Sync(_settings));
-        SyncAudioHotkey();
         RefreshMenuChecks();
     }
 
@@ -1180,7 +1228,6 @@ internal sealed class BuddyContext : ApplicationContext
         _hotkey?.Dispose();
         _sounds.Dispose();
         _screenHotkey?.Dispose();
-        _audioHotkey?.Dispose();
         if (KeepAwake.Until != null) KeepAwake.Set(null);
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         Microsoft.Win32.SystemEvents.SessionEnding -= OnSessionEnding;
