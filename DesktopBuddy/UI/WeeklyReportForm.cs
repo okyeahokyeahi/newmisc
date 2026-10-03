@@ -7,7 +7,8 @@ namespace DesktopBuddy.UI;
 /// <summary>The last 7 days vs the 7 before: memory, heat, games, startup, disk, battery, clip storage.</summary>
 internal sealed class WeeklyReportForm : Form
 {
-    private sealed record Section(string Heading, string Body, Color? Color = null);
+    /// <summary>AiBody: what the AI summary gets instead of Body (null = same), e.g. without folder names.</summary>
+    private sealed record Section(string Heading, string Body, Color? Color = null, string? AiBody = null);
 
     private readonly BuddyServices _s;
     private readonly HealthLog _log;
@@ -59,6 +60,7 @@ internal sealed class WeeklyReportForm : Form
             _sections = [new Section("Something went wrong", "Couldn't build the report (details are in the log).", Ui.Amber)];
         }
         if (IsDisposed) return;
+        bool built = _sections.Count > 1;
 
         _text.Clear();
         foreach (Section s in _sections)
@@ -69,7 +71,7 @@ internal sealed class WeeklyReportForm : Form
         Ui.AppendBody(_text, "Buddy keeps about 60 days of daily numbers in health-days.json in the log folder.", Ui.Grey);
         _text.SelectionStart = 0;
         _text.ScrollToCaret();
-        _aiButton.Enabled = true;
+        _aiButton.Enabled = built;
     }
 
     // ---------- The numbers ----------
@@ -77,27 +79,28 @@ internal sealed class WeeklyReportForm : Form
     {
         var sections = new List<Section>();
         Settings settings = _s.Settings;
-        DateTime today = DateTime.Today;
-        string weekStart = today.AddDays(-6).ToString("yyyy-MM-dd"), prevStart = today.AddDays(-13).ToString("yyyy-MM-dd");
+        // Whole days only (today is still going), so both weeks are the same length.
+        DateTime today = DateTime.Today, first = today.AddDays(-7), prevFirst = today.AddDays(-14);
+        string weekStart = first.ToString("yyyy-MM-dd"), prevStart = prevFirst.ToString("yyyy-MM-dd"), todayKey = today.ToString("yyyy-MM-dd");
         IReadOnlyList<DayStats> days = _log.Days();
-        var week = days.Where(d => string.CompareOrdinal(d.Day, weekStart) >= 0).ToList();
+        var week = days.Where(d => string.CompareOrdinal(d.Day, weekStart) >= 0 && string.CompareOrdinal(d.Day, todayKey) < 0).ToList();
         var prev = days.Where(d => string.CompareOrdinal(d.Day, prevStart) >= 0 && string.CompareOrdinal(d.Day, weekStart) < 0).ToList();
         bool hasPrev = prev.Sum(d => d.OnMinutes) >= 120;
 
         double onHours = week.Sum(d => d.OnMinutes) / 60;
-        sections.Add(new Section($"The week of {today.AddDays(-6):MMM d} to {today:MMM d}",
+        sections.Add(new Section($"The last 7 days ({first:MMM d} to {today.AddDays(-1):MMM d})",
             week.Count == 0
-                ? "No numbers yet. Buddy needs to run for a few days first."
+                ? "No full days recorded yet. Check back tomorrow."
                 : $"Buddy watched for about {onHours:0} hours across {week.Count(d => d.OnMinutes >= 10)} days." +
-                  (hasPrev ? " Arrows compare with the week before." : " Next week's report will compare with this one.")));
+                  (hasPrev ? " \"Last week\" means the 7 days before that." : " Most comparisons with last week start next week.")));
 
         // Memory
         double? ram = Average(week, d => d.AverageRam, d => d.Samples), ramPrev = Average(prev, d => d.AverageRam, d => d.Samples);
         double full = Share(week), fullPrev = Share(prev);
         if (ram is double avgRam)
         {
-            string body = $"Average RAM use {avgRam:0}%{Change(avgRam, hasPrev ? ramPrev : null, "%")}. " +
-                          $"Very full (90%+) {full:P0} of the time{Change(full * 100, hasPrev ? fullPrev * 100 : null, " pts")}.";
+            string body = $"Average RAM use {avgRam:0}%{Was(hasPrev ? ramPrev : null, "0", "%")}. " +
+                          $"Very full (90%+) {full * 100:0}% of the time{Was(hasPrev ? fullPrev * 100 : null, "0", "%")}.";
             if (full >= 0.25)
                 body += "\nThat's a lot. Closing Chrome and Studio before games helps today; a second 16 GB stick is the real fix " +
                         "(the AN515-57 has two slots and takes up to 32 GB of DDR4-3200).";
@@ -112,27 +115,30 @@ internal sealed class WeeklyReportForm : Form
             double slowPrevMin = prev.Sum(d => d.CpuSlowSeconds + d.GpuSlowSeconds) / 60;
             bool bad = slowMin >= 10;
             string body = $"Peak CPU {Format.Temp(peakCpu)} · peak GPU {Format.Temp(peakGpu)}.\n" +
-                          (slowMin < 0.5 ? "No slowing down from heat. Cooling kept up."
-                              : $"Slowed down from heat for {slowMin:0} minutes{Change(slowMin, hasPrev ? slowPrevMin : null, " min")}.");
+                          (slowMin < 0.5 ? $"No slowing down from heat{Was(hasPrev && slowPrevMin >= 0.5 ? slowPrevMin : null, "0", " minutes")}. Cooling kept up."
+                              : $"Slowed down from heat for {slowMin:0} minutes{Was(hasPrev ? slowPrevMin : null, "0", "")}.");
             if (bad) body += " Max fan in NitroSense while gaming and lift the back of the laptop. If it keeps growing week to week, the vents need cleaning.";
             sections.Add(new Section("Heat", body, bad ? Ui.Red : peakCpu >= settings.CpuTempWarnC || peakGpu >= settings.GpuTempWarnC ? Ui.Amber : Ui.Green));
         }
 
         // Games
         var sessions = ReadSessions();
-        var thisWeek = sessions.Where(x => x.Start.Date >= today.AddDays(-6)).ToList();
-        var lastWeek = sessions.Where(x => x.Start.Date >= today.AddDays(-13) && x.Start.Date < today.AddDays(-6)).ToList();
+        var thisWeek = sessions.Where(x => x.Start.Date >= first && x.Start.Date < today).ToList();
+        var lastWeek = sessions.Where(x => x.Start.Date >= prevFirst && x.Start.Date < first).ToList();
+        int lateFrom = Math.Clamp(settings.LateNightHour, 0, 23);
+        if (lateFrom is >= 5 and < 12) lateFrom += 12; // same rule as the late-night nudge
         if (thisWeek.Count > 0)
         {
             double hours = thisWeek.Sum(x => x.Minutes) / 60, hoursPrev = lastWeek.Sum(x => x.Minutes) / 60;
             var top = thisWeek.GroupBy(x => x.Game, StringComparer.OrdinalIgnoreCase)
                 .Select(g => (Game: g.Key, Hours: g.Sum(x => x.Minutes) / 60)).OrderByDescending(g => g.Hours).Take(3);
-            double lateMin = thisWeek.Where(x => x.Start.Hour >= 23 || x.Start.Hour < 5).Sum(x => x.Minutes);
-            string body = $"{thisWeek.Count} session(s), {hours:0.0} hours{Change(hours, lastWeek.Count > 0 ? hoursPrev : null, " h")}.\n" +
+            double lateMin = thisWeek.Where(x => lateFrom >= 12 ? x.Start.Hour >= lateFrom || x.Start.Hour < 5 : x.Start.Hour >= lateFrom && x.Start.Hour < 5)
+                .Sum(x => x.Minutes);
+            string body = $"{thisWeek.Count} session(s), {hours:0.0} hours{Was(lastWeek.Count > 0 ? hoursPrev : null, "0.0", " hours")}.\n" +
                           "Most played: " + string.Join(", ", top.Select(g => $"{Diagnosis.FriendlyName(g.Game)} {g.Hours:0.0} h")) + ".";
             double? avgPeakGpu = thisWeek.Where(x => x.PeakGpu != null).Select(x => x.PeakGpu!.Value).DefaultIfEmpty().Average() is double a && a > 0 ? a : null;
             if (avgPeakGpu != null) body += $"\nTypical peak GPU while playing: {avgPeakGpu:0}°C.";
-            if (lateMin >= 60) body += $"\n{lateMin / 60:0.0} hours of that started after 11 pm.";
+            if (lateMin >= 60) body += $"\n{lateMin / 60:0.0} hours of that started after {lateFrom:00}:00.";
             sections.Add(new Section("Games", body));
         }
         else
@@ -148,7 +154,7 @@ internal sealed class WeeklyReportForm : Form
             double median = Median(boots);
             bool slow = bootsPrev.Count > 0 && median > Median(bootsPrev) * 1.4 && median > 45;
             sections.Add(new Section("Startup",
-                $"Windows usually took {median:0}s to start{Change(median, bootsPrev.Count > 0 ? Median(bootsPrev) : null, "s")}." +
+                $"Windows usually took {median:0}s to start{Was(bootsPrev.Count > 0 ? Median(bootsPrev) : null, "0", "s")}." +
                 (slow ? " Noticeably slower than last week: check Task Manager > Startup apps for something new." : ""),
                 slow ? Ui.Amber : null));
         }
@@ -157,12 +163,19 @@ internal sealed class WeeklyReportForm : Form
         if (_s.Disk.FreeBytes is long free)
         {
             double freeGb = free / (1024d * 1024 * 1024);
-            double? weekAgo = week.FirstOrDefault(d => d.DiskFreeGb != null)?.DiskFreeGb;
-            double change = weekAgo is double w ? freeGb - w : 0;
+            // Compare only with a reading from about a week ago, not from yesterday.
+            string fiveDaysAgo = today.AddDays(-5).ToString("yyyy-MM-dd");
+            DayStats? old = days.Where(d => d.DiskFreeGb != null && string.CompareOrdinal(d.Day, weekStart) >= 0
+                                            && string.CompareOrdinal(d.Day, fiveDaysAgo) <= 0).FirstOrDefault();
+            string trend = "";
+            if (old?.DiskFreeGb is double w)
+            {
+                double change = freeGb - w;
+                trend = Math.Abs(change) < 2 ? " About the same as a week ago."
+                    : change < 0 ? $" Down {-change:0} GB from {w:0} GB a week ago." : $" Up {change:0} GB from {w:0} GB a week ago.";
+            }
             bool low = freeGb < settings.DiskFreeWarnGb;
-            sections.Add(new Section("Drive C:",
-                $"{freeGb:0} GB free." + (Math.Abs(change) >= 2 ? change < 0 ? $" Down {-change:0} GB this week." : $" Up {change:0} GB this week." : " About the same as a week ago."),
-                low ? Ui.Amber : null));
+            sections.Add(new Section("Drive C:", $"{freeGb:0} GB free." + trend, low ? Ui.Amber : null));
         }
 
         cancel.ThrowIfCancellationRequested();
@@ -175,7 +188,8 @@ internal sealed class WeeklyReportForm : Form
                 $"{Format.Bytes(clips.TotalBytes)} in Videos (and Roblox screenshots).\n" +
                 string.Join("\n", clips.Biggest.Select(f => $"• {Path.GetFileName(f.Path.TrimEnd('\\'))}: {Format.Bytes(f.Bytes)}")) +
                 (big ? "\nOld clips are the easiest space to win back: move the ones you want to keep to a USB drive." : ""),
-                big ? Ui.Amber : null));
+                big ? Ui.Amber : null,
+                AiBody: $"{Format.Bytes(clips.TotalBytes)} of clips and recordings." + (big ? " That's a lot." : ""))); // no folder names to the AI
         }
 
         // Battery
@@ -208,7 +222,7 @@ internal sealed class WeeklyReportForm : Form
         _aiButton.Text = "Thinking…";
         try
         {
-            string report = string.Join("\n\n", _sections.Select(s => $"{s.Heading}\n{s.Body}"));
+            string report = string.Join("\n\n", _sections.Select(s => $"{s.Heading}\n{s.AiBody ?? s.Body}"));
             string answer = await _s.Ai.Ask(Prompts.System,
                 [(true, "Here is my laptop's weekly health report:\n<weekly_report>\n" + report + "\n</weekly_report>\n\n" +
                         "In 3 short bullet points: what went well, what got worse, and the single most useful thing to do this week. Plain words, no jargon.")],
@@ -296,12 +310,7 @@ internal sealed class WeeklyReportForm : Form
         return sorted[sorted.Count / 2];
     }
 
-    /// <summary>" (↑ 4%)" style comparison, or "" when there's nothing to compare with.</summary>
-    private static string Change(double now, double? before, string unit)
-    {
-        if (before is not double b) return "";
-        double diff = now - b;
-        if (Math.Abs(diff) < 0.5) return " (same as last week)";
-        return $" ({(diff > 0 ? "↑" : "↓")} {Math.Abs(diff):0}{unit} vs last week)";
-    }
+    /// <summary>" (last week 70%)", or "" when there's nothing to compare with.</summary>
+    private static string Was(double? before, string format, string unit) =>
+        before is double b ? $" (last week {b.ToString(format, CultureInfo.CurrentCulture)}{unit})" : "";
 }

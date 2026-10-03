@@ -681,7 +681,7 @@ internal sealed class BuddyContext : ApplicationContext
                       (throttled ? " · slowed down from heat" : "") +
                       (report.Network?.Spikes > 3 ? $" · {report.Network.Spikes} lag spikes" : "") +
                       (report.HeldAlerts.Count > 0 ? $" · {report.HeldAlerts.Count} alert(s) waiting" : "") +
-                      (IsLateNight() ? $". It's {DateTime.Now:HH:mm}, good moment to call it a night" : "") +
+                      (IsLateNight() ? $". It's {DateTime.Now:HH:mm}, a good moment to call it a night" : "") +
                       ". Click for the report.";
         Notify($"Game over: {Diagnosis.FriendlyName(report.Game)}", text, throttled || report.HeldAlerts.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
             onClick: () => new GameReportForm(report, _settings, ShowAsk).Show());

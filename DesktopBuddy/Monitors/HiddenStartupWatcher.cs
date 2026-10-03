@@ -118,7 +118,7 @@ public sealed class HiddenStartupWatcher
         if (reason == null) return; // looks like a normal updater; logged above
 
         Alert?.Invoke(new HiddenStartupAlert(place, "Something set itself to auto-start",
-            $"{what} {reason}: {Short(command, 80)}. Info-stealers hide like this. Didn't install anything? Click to see what it is.",
+            $"{what} {reason}: {Short(command, 50)}. Info-stealers hide like this. Didn't install anything? Click to see what it is.",
             // Script hosts (PowerShell etc.) are Windows' own files; the danger is in what they're told to run, so no "what is this file" view.
             ScriptHosts.Contains(exeName) || !File.Exists(exe) ? null : exe, $"{what} {reason}."));
     }

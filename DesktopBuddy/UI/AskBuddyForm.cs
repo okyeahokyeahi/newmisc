@@ -134,14 +134,11 @@ internal sealed class AskBuddyForm : Form
             if (_s.Settings.AiActions)
             {
                 var actions = new BuddyActions(_s, _s.PauseAlerts);
-                AiClient.Reply reply = await _s.Ai.AskWithTools(Prompts.System + BuddyActions.PromptAddition, turns, actions.Definitions, _closing.Token);
+                AiClient.Reply reply = await _s.Ai.AskWithTools(Prompts.SystemWithActions, turns, actions.Definitions, _closing.Token);
                 if (IsDisposed) return;
                 answer = reply.Text;
-                if (answer.Length > 0)
-                {
-                    Ui.AppendHeading(_transcript, "Buddy", Ui.Green);
-                    Ui.AppendBody(_transcript, answer);
-                }
+                if (answer.Length > 0 || reply.ToolCalls.Count > 0) Ui.AppendHeading(_transcript, "Buddy", Ui.Green);
+                if (answer.Length > 0) Ui.AppendBody(_transcript, answer);
                 // Each proposed action: checked and confirmed by Desktop Buddy itself, at most 3 per reply.
                 foreach (var (name, input) in reply.ToolCalls.Take(3))
                 {
@@ -149,6 +146,8 @@ internal sealed class AskBuddyForm : Form
                     done.Add(result);
                     if (!IsDisposed) Ui.AppendBody(_transcript, result, result.StartsWith('✔') ? Ui.Green : Ui.Grey);
                 }
+                if (reply.ToolCalls.Count > 3 && !IsDisposed)
+                    Ui.AppendBody(_transcript, $"(Skipped {reply.ToolCalls.Count - 3} more: at most 3 actions per message. Ask again for the rest.)", Ui.Grey);
             }
             else
             {
@@ -159,7 +158,10 @@ internal sealed class AskBuddyForm : Form
             }
 
             _history.Add((true, question));
-            _history.Add((false, done.Count > 0 ? $"{answer}\n[Actions: {string.Join(" ", done)}]".Trim() : answer));
+            // A neutral app note, not a format the model could copy to claim actions it never took.
+            _history.Add((false, done.Count > 0
+                ? $"{answer}\n(Note from the Desktop Buddy app, not the assistant: results after the user's Yes/No: {string.Join(" ", done)})".Trim()
+                : answer));
             while (_history.Count > MaxTurnsKept) _history.RemoveRange(0, 2);
         }
         catch (AiUnavailableException ex)
