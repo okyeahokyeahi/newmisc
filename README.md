@@ -9,7 +9,7 @@ Acer Nitro AN515-57 but runs on any Windows 10/11 PC.
 |---|---|
 | **Heavy-app alerts** | A notification when an app (all its processes added together, e.g. every `chrome.exe`) stays above 25% CPU or 3 GB RAM for 3+ minutes. Also warns when total RAM stays above 90%. |
 | **Temperature monitor** | Live CPU and GPU temperatures. The tray face goes green → orange (within 10°C of your limit, or a short spike over it) → red (over the limit for 60+ seconds), and you get a notification then. Defaults: 90°C CPU / 85°C GPU. Short spikes are normal for this CPU and are ignored. |
-| **Suspicious-program check** | A popup with **Kill it / Always allow / Ignore / Show file** when a program has warning signs. It never kills anything on its own. One popup per program (not per copy). *Kill it* closes every copy; *Ignore* hides it until the app restarts. Popups wait while a full-screen game or video is in front. |
+| **Suspicious-program check** | A popup with **Kill it / Freeze / Always allow / Ignore / Show file** when a program has warning signs. It never kills anything on its own. One popup per program (not per copy). *Kill it* closes every copy; *Freeze* pauses every copy without closing it, so it can't do anything while you check it (resume or end it later from tray menu → *Frozen programs*; a PC restart also unfreezes it); *Ignore* hides it until the app restarts. Popups wait while a full-screen game or video is in front. |
 | **Startup watch** | A notification when something new adds itself to "start with Windows". |
 | **Heat slowdown detector** | Tells you when the CPU or GPU is actually *slowing itself down* because it's too hot, which is what makes games stutter. The GPU reading comes straight from the NVIDIA driver; for the CPU it's flagged when a core is within 2°C of its 100°C limit. Also warns when the power brake (a weak charger) holds the GPU back. Shows minutes of slowdown today. |
 | **"Why is my laptop slow or loud?"** | One click gives plain-English causes: RAM hogs (with fixes), which apps `msedgewebview2` is really working for, Windows chores like CompatTelRunner, heat, disk space. No AI needed. |
@@ -33,10 +33,10 @@ Acer Nitro AN515-57 but runs on any Windows 10/11 PC.
 | **Roblox kick explainer** | When Roblox disconnects you, the game report says why in plain English (error 267, 277, 279…) and quotes the game's kick message. Unknown codes get an *Ask Buddy what it means* button. |
 | **Studio crash help** | If Roblox Studio closes unexpectedly, a notification points to your newest recovery/autosave file and Buddy keeps a backup copy in `%AppData%\DesktopBuddy\StudioBackups` (newest 20). |
 | **Weekly health report** | Once a week (or tray menu → *Weekly health report*): this week vs last for RAM, heat slowdown, games played, Windows startup time, free disk space, battery wear, and how much space game clips take. Optional AI summary. |
-| **Sound switch** | **Ctrl+Alt+A** moves sound to your next output (headset ↔ speakers), for games, music and Discord calls. |
 | **Late-night nudge** (off by default) | After a game that ends late, the game-over notification mentions the time. |
 | **Settings window** | Tray menu → *Settings…*: every option in tabs (General, Alerts, Security, Games, AI), no file editing. |
-| **Downloads tidy** (off by default) | Weekly, moves files older than 14 days into `Downloads\Older\<year-month>`. Never deletes, and every tidy can be undone (tray menu → *Downloads tidy*). |
+| **Tidy helper** | Tray menu → *Tidy* (or the quick panel): groups loose files on your Desktop and in Downloads (installers, zips, pictures, videos, documents, Roblox files, shortcuts, exact duplicates…) and moves the groups you tick into a `Tidied` folder next to them. Never moves folders, never touches Documents, never deletes, skips files from the last 24 hours, and every tidy can be undone. With an API key, *Ask AI* weighs the pros and cons of each group and whether moving could break anything. |
+| **Downloads auto-tidy** (off by default) | Weekly, moves files older than 14 days into `Downloads\Older\<year-month>`. Never deletes, and every tidy can be undone (tray menu → *Downloads tidy*). |
 
 Right-click the tray icon for the menu, or double-click it for the live status window.
 **Pause alerts for 1 hour** silences notifications and holds back suspicious-program popups (handy while gaming).
@@ -77,11 +77,14 @@ This is a fan homage. The visuals are original and no assets from the show are i
   game reports; *Is this safe?* on a recent download in the quick panel; and **Ask about something on screen** (Ctrl+Alt+S):
   drag a box around an error or setting, check the preview, then send it with your question.
 - **What's sent:** program names and numbers only (temperatures, RAM, the busiest apps), plus a screenshot only when you
-  pick one yourself and press Ask. Never window titles, files, the clipboard or your username. Click *What gets sent?* in the
+  pick one yourself and press Ask, and file names in the tidy helper only when *Include file names* is ticked and you press *Ask AI*. Never window titles, files, the clipboard or your username. Click *What gets sent?* in the
   chat window to see it. Every AI question starts with you pressing a button; nothing is sent in the background.
 - **What it can do:** in Ask Buddy you can say things like "close Chrome", "pause alerts for an hour", "keep it awake for 3 hours",
   "open Sound settings" or "empty the recycle bin". Only those six kinds of action exist, and **every one asks you Yes/No
   first**. It refuses to close games, Discord, Roblox Studio or Windows parts. Turn it off with `AiActions` (Settings → AI).
+  With the MAGI theme on, closing an app, pausing alerts, keeping awake and emptying the Recycle Bin go to a **MAGI vote** first:
+  the three cores vote from Buddy's own facts (RAM freed, unsaved work, security), optionally voiced by the AI, then you decide.
+  Turn that off with `MagiVotesOnAiActions`.
 - **Weekly report summary:** *Sum it up (AI)* in the weekly report sends the report's text (numbers only) for a 3-point summary.
 
 ## What it does NOT do
@@ -136,9 +139,9 @@ Tray menu → *Settings…* opens the Settings window. Everything is also stored
 | `TidyDownloads` / `TidyAfterDays` | false / 14 | Weekly Downloads tidy |
 | `RobloxKickExplainer` / `StudioCrashHelp` | true / true | Roblox disconnect reasons, Studio crash help |
 | `WeeklyReport` / `AiWeeklySummary` | true / true | Weekly report notice, and its AI summary button |
-| `AudioHotkey` | true | Ctrl+Alt+A sound switch |
 | `LateNightNudge` / `LateNightHour` | false / 23 | Late-night mention after games, and when "late" starts |
 | `AiActions` | true | Let Ask Buddy do the six confirmed actions |
+| `MagiVotesOnAiActions` | true | With the MAGI theme, put those actions to a MAGI vote first |
 
 A log is kept at `%AppData%\DesktopBuddy\log.txt` (tray menu → *Open log folder*).
 

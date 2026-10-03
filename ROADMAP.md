@@ -33,16 +33,19 @@
   - Roblox kick explainer and Studio crash help
   - Plain-English actions in Ask Buddy (six actions, each behind Yes/No)
   - Weekly health report with battery wear and game-clip storage (clip size also in the low-disk warning)
-  - Ctrl+Alt+A headset/speakers switch
   - Late-night nudge (opt-in)
   - "What is this?" from hidden-startup alerts
   - MAGI theme with optional AI voices
+- **v1.4:**
+  - Freeze (suspend) suspicious programs, with a Frozen programs menu
+  - MAGI votes on Ask Buddy's actions
+  - Tidy helper for Desktop and Downloads, with AI pros and cons
+  - Removed: Ctrl+Alt+A sound switch (not wanted)
 
 ## Saved for later
 - **#12 Roblox Studio plugin scanner.** Scan `%LocalAppData%\Roblox\Plugins` for patterns backdoored free plugins use
   (`require(<number>)`, `getfenv`, `loadstring`). Results shown as "maybe", since it's a best guess.
 - **MAGI-style tray icon.** Offered, not built yet.
-- **Mic switching on Ctrl+Alt+A.** Today it switches output only.
 
 ## Skipped on purpose
 - **#3 "Gaming on battery" warning.** The laptop is always plugged in. (The power-brake warning in #7 still covers a weak charger.)
