@@ -60,7 +60,7 @@ internal static class MagiCases
             Actions =
             [
                 new MagiAction("Terminate", terminate, Primary: casper.Approve && melchior.Approve || casper.Approve && balthasar.Approve || melchior.Approve && balthasar.Approve),
-                new MagiAction("Freeze (pause it)", freeze),
+                new MagiAction("Freeze", freeze),
                 new MagiAction("What is this?", explain, KeepOpen: true),
                 new MagiAction("Always allow", allow),
                 new MagiAction("Ignore", ignore),
@@ -167,14 +167,16 @@ internal static class MagiCases
             : Browsers.Contains(process) ? "Tabs come back next time (Ctrl+Shift+T)."
             : "Closes politely, like clicking X, so it can ask to save.");
         var casper = new CoreVote(true, "Closing an app has no security downside.");
-        return ActionCase($"Should Desktop Buddy close {label}?", $"CLOSE {label} ?", $"Asked in Ask Buddy · {Format.Bytes(mem)} RAM",
+        return ActionCase($"Should Desktop Buddy close {label}?", $"CLOSE {label.ToUpperInvariant()} ?", $"Asked in Ask Buddy · {Format.Bytes(mem)} RAM",
             Code(process), melchior, balthasar, casper, "Close it", approve, deny);
     }
 
     public static MagiCase PauseAlerts(int minutes, double? cpuC, double cpuLimitC, Action approve, Action deny)
     {
         bool hot = cpuC >= cpuLimitC - 5;
-        var melchior = new CoreVote(!hot, hot ? $"CPU is at {cpuC:0}°C right now; you'd miss heat warnings." : "Temperatures are fine; nothing to miss right now.");
+        var melchior = new CoreVote(!hot,
+            cpuC == null ? "No temperature reading, so no heat warnings to miss either way."
+            : hot ? $"CPU is at {cpuC:0}°C right now; you'd miss heat warnings." : $"CPU at {cpuC:0}°C. Nothing to miss right now.");
         var balthasar = new CoreVote(minutes <= 180,
             minutes <= 180 ? $"{minutes} minutes of quiet, then alerts come back on their own." : $"{minutes / 60.0:0.#} hours is long; easy to forget it's on.");
         var casper = new CoreVote(true, "Security warnings still come through while paused.");
@@ -220,6 +222,7 @@ internal static class MagiCases
             IfApproved = "APPROVED. Your call.",
             IfDenied = "NOT RECOMMENDED. Your call.",
             Actions = [new MagiAction(doLabel, approve, Primary: passed), new MagiAction("Don't", deny, Primary: !passed)],
+            HideDismiss = true, // "Don't" already means no
         };
     }
 

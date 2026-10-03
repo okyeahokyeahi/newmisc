@@ -254,6 +254,9 @@ internal sealed class BuddyContext : ApplicationContext
         Log.Info($"Desktop Buddy {Updater.CurrentVersion.ToString(3)} started");
         RestoreLeftoverPowerMode();
         _ = Task.Run(() => Autostart.Sync(settings)); // schtasks takes a moment; don't hold up the tray
+        // Programs frozen before a restart/update: don't ask about them again, they're in the Frozen programs menu.
+        try { foreach (ProcessFreezer.Entry e in ProcessFreezer.List()) _scanner.MarkReported(e.ExePath); }
+        catch (Exception ex) { Log.Error("Loading frozen programs failed", ex); }
         _loop = Task.Run(() => MonitorLoop(_stop.Token));
         Notify("Desktop Buddy is running", "I'm in the system tray. Double-click me for live stats.", ToolTipIcon.Info, critical: true);
     }
@@ -905,14 +908,21 @@ internal sealed class BuddyContext : ApplicationContext
             var item = new ToolStripMenuItem($"{e.Name}  (frozen since {e.Since:HH:mm})");
             item.DropDownItems.Add("Resume it", null, (_, _) =>
             {
-                int n = ProcessFreezer.Resume(e.ExePath);
-                Notify("Resumed", $"{e.Name} is running again ({n} cop{(n == 1 ? "y" : "ies")}).", ToolTipIcon.Info, critical: true);
+                var (n, failed) = ProcessFreezer.Resume(e.ExePath);
+                if (failed == 0) _scanner.ForgetReport(e.ExePath); // running again: warn again if it's still suspicious later
+                Notify(failed == 0 ? "Resumed" : "Couldn't resume everything",
+                    failed == 0 ? $"{e.Name} is running again." : $"{failed} cop{(failed == 1 ? "y" : "ies")} of {e.Name} stayed frozen. Try again, or restart the PC.",
+                    ToolTipIcon.Info, critical: true);
             });
             item.DropDownItems.Add("End it (kill)", null, (_, _) =>
             {
-                int n = ProcessFreezer.Kill(e.ExePath);
-                _scanner.ForgetReport(e.ExePath); // if it comes back, ask again
-                Notify("Ended", $"{e.Name} was closed ({n} cop{(n == 1 ? "y" : "ies")}).", ToolTipIcon.Info, critical: true);
+                if (MessageBox.Show($"End {e.Name}? Anything it hadn't saved is lost.", "Desktop Buddy", MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+                var (n, failed) = ProcessFreezer.Kill(e.ExePath);
+                if (failed == 0) _scanner.ForgetReport(e.ExePath); // if it comes back, ask again
+                Notify(failed == 0 ? "Ended" : "Couldn't end everything",
+                    failed == 0 ? $"{e.Name} was closed." : $"{failed} cop{(failed == 1 ? "y" : "ies")} of {e.Name} couldn't be ended (still frozen).",
+                    ToolTipIcon.Info, critical: true);
             });
             item.DropDownItems.Add("What is this?", null, (_, _) =>
                 new ExplainForm(_services, Path.GetFileNameWithoutExtension(e.ExePath), e.ExePath, ["You froze it after a suspicious-program warning."]).Show());

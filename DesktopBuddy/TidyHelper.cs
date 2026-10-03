@@ -14,6 +14,8 @@ internal static class TidyHelper
 {
     private static readonly string JournalPath = Path.Combine(Settings.Folder, "tidy-helper-journal.json");
     private static readonly object Gate = new();
+    private const FileAttributes RecallOnOpen = (FileAttributes)0x40000;
+    private const FileAttributes RecallOnDataAccess = (FileAttributes)0x400000;
     private static readonly string[] SkipExtensions = [".crdownload", ".part", ".tmp", ".partial", ".download", ".ini"];
 
     public static string DesktopFolder => Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
@@ -49,8 +51,9 @@ internal static class TidyHelper
             if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
             List<FileInfo> files = Candidates(folder);
 
-            // Duplicates first: "photo (1).png" that's byte-for-byte the same as "photo.png" next to it.
-            var duplicates = files.Where(f => IsCopyOf(f, folder)).ToList();
+            // Duplicates first: "photo (1).png" that's byte-for-byte the same as "photo.png" next to it. Only for kinds
+            // of file that are safe to move by default (a duplicate shortcut or Roblox place stays in its own, unticked group).
+            var duplicates = files.Where(f => DefaultOn(f, place) && IsCopyOf(f, folder)).ToList();
             if (duplicates.Count > 0)
                 groups.Add(new Group($"{place}|Duplicates", "Duplicates", place, folder, duplicates, true,
                     "Exact copies of another file right next to them. Moved, not deleted: check, then delete them yourself."));
@@ -62,13 +65,28 @@ internal static class TidyHelper
                 if (match.Count == 0) continue;
                 rest = rest.Except(match).ToList();
                 if (category == "Shortcuts" && place == "Downloads") continue; // shortcuts in Downloads are rare; leave them
-                groups.Add(new Group($"{place}|{category}", category, place, folder, match, on, note));
+                if (category == "Installers" && place == "Desktop")
+                    groups.Add(new Group($"{place}|{category}", "Programs", place, folder, match, false,
+                        "Programs on the Desktop are often portable tools that run from there (pins and shortcuts would break). Off by default."));
+                else
+                    groups.Add(new Group($"{place}|{category}", category, place, folder, match, on, note));
             }
             if (rest.Count > 0)
                 groups.Add(new Group($"{place}|Other", "Other", place, folder, rest, false,
                     "Everything else. Off by default because some programs expect their files where they are."));
         }
         return groups;
+    }
+
+    private static bool DefaultOn(FileInfo f, string place)
+    {
+        string ext = f.Extension.ToLowerInvariant();
+        foreach (var (category, extensions, on, _) in Categories)
+        {
+            if (!extensions.Contains(ext)) continue;
+            return on && !(category == "Installers" && place == "Desktop");
+        }
+        return false; // "Other"
     }
 
     /// <summary>Moves the files in the chosen groups. Returns (moved, skipped because in use/changed).</summary>
@@ -78,7 +96,10 @@ internal static class TidyHelper
         {
             Journal journal = Load();
             var batch = new Batch { When = DateTime.Now };
+            journal.Batches.Add(batch);
+            if (journal.Batches.Count > 10) journal.Batches.RemoveAt(0);
             int skipped = 0;
+            DateTime recent = DateTime.Now.AddHours(-24);
             foreach (Group g in chosen)
             {
                 foreach (FileInfo f in g.Files)
@@ -86,11 +107,12 @@ internal static class TidyHelper
                     try
                     {
                         f.Refresh();
-                        if (!f.Exists || DownloadsTidy.IsLocked(f.FullName)) { skipped++; continue; }
+                        if (!f.Exists || f.LastWriteTime > recent || DownloadsTidy.IsLocked(f.FullName)) { skipped++; continue; }
                         Directory.CreateDirectory(g.Destination);
                         string target = DownloadsTidy.FreeName(Path.Combine(g.Destination, f.Name));
                         File.Move(f.FullName, target);
                         batch.Moves.Add(new DownloadsTidy.Move { From = f.FullName, To = target });
+                        Save(journal); // after every move, so a crash mid-tidy can still be undone
                     }
                     catch (Exception ex)
                     {
@@ -99,24 +121,27 @@ internal static class TidyHelper
                     }
                 }
             }
-            if (batch.Moves.Count > 0)
-            {
-                journal.Batches.Add(batch);
-                if (journal.Batches.Count > 10) journal.Batches.RemoveAt(0);
-                Save(journal);
-            }
+            if (batch.Moves.Count == 0) journal.Batches.Remove(batch);
+            Save(journal);
             Log.Info($"Tidy helper: moved {batch.Moves.Count}, skipped {skipped}");
             return (batch.Moves.Count, skipped);
         }
     }
 
-    public static bool CanUndo
+    /// <summary>When the last tidy happened and how many files it moved, or null.</summary>
+    public static (DateTime When, int Files)? LastBatch
     {
         get
         {
-            lock (Gate) return Load().Batches.Count > 0;
+            lock (Gate)
+            {
+                var batches = Load().Batches;
+                return batches.Count > 0 ? (batches[^1].When, batches[^1].Moves.Count) : null;
+            }
         }
     }
+
+    public static bool CanUndo => LastBatch != null;
 
     /// <summary>Puts the last batch back. Returns (restored, skipped).</summary>
     public static (int Restored, int Skipped) UndoLast()
@@ -127,26 +152,29 @@ internal static class TidyHelper
             if (journal.Batches.Count == 0) return (0, 0);
             Batch last = journal.Batches[^1];
             int restored = 0, skipped = 0;
-            foreach (DownloadsTidy.Move m in last.Moves)
+            var putBack = new List<string>();
+            last.Moves.RemoveAll(m =>
             {
                 try
                 {
-                    if (File.Exists(m.To) && !File.Exists(m.From))
-                    {
-                        DownloadsWatcher.Ignore(m.From); // don't treat it as a new download
-                        File.Move(m.To, m.From);
-                        restored++;
-                    }
-                    else skipped++;
+                    if (!File.Exists(m.To)) { skipped++; return true; } // gone: nothing left to undo
+                    if (File.Exists(m.From)) { skipped++; return false; } // spot taken: keep it so a later undo can retry
+                    DownloadsWatcher.Ignore(m.From); // don't treat it as a new download
+                    File.Move(m.To, m.From);
+                    putBack.Add(m.From);
+                    restored++;
+                    return true;
                 }
                 catch (Exception ex)
                 {
                     Log.Error($"Tidy helper: undoing {m.To} failed", ex);
                     skipped++;
+                    return false; // in use: keep it for another try
                 }
-            }
-            journal.Batches.RemoveAt(journal.Batches.Count - 1);
+            });
+            if (last.Moves.Count == 0) journal.Batches.Remove(last);
             Save(journal);
+            DownloadsTidy.KeepForAWhile(putBack); // so the weekly Downloads auto-tidy doesn't move them straight back out
             // Remove Tidied folders the undo left empty.
             foreach (string dir in last.Moves.Select(m => Path.GetDirectoryName(m.To)!).Distinct())
                 TryRemoveEmpty(dir);
@@ -163,7 +191,8 @@ internal static class TidyHelper
         {
             foreach (FileInfo f in new DirectoryInfo(folder).EnumerateFiles("*", new EnumerationOptions { IgnoreInaccessible = true }))
             {
-                if ((f.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0) continue;
+                if ((f.Attributes & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.Offline | RecallOnOpen | RecallOnDataAccess)) != 0)
+                    continue; // hidden, or a OneDrive "online-only" file (touching it would download it)
                 if (SkipExtensions.Contains(f.Extension.ToLowerInvariant())) continue;
                 if (f.LastWriteTime > recent || f.CreationTime > recent) continue; // might still be downloading or in use
                 list.Add(f);

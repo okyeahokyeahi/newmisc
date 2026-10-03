@@ -75,7 +75,7 @@ internal sealed class MagiForm : Form
             Padding = new Padding(12, 10, 12, 10),
             BackColor = Black,
         };
-        _buttons.Controls.Add(MakeButton("Dismiss", primary: false, keepOpen: false, () => { }));
+        if (!magiCase.HideDismiss) _buttons.Controls.Add(MakeButton("Dismiss", primary: false, keepOpen: false, () => { }));
         foreach (MagiAction a in magiCase.Actions.Reverse())
             _buttons.Controls.Add(MakeButton(a.Label, a.Primary, a.KeepOpen, a.Run));
         SetActionsEnabled(false);

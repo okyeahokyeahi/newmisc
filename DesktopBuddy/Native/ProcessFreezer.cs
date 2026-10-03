@@ -96,63 +96,115 @@ internal static class ProcessFreezer
         lock (Gate)
         {
             List<Entry> all = LoadAlive();
-            Save(all);
+            if (all.Count > 0 || File.Exists(StatePath)) Save(all);
+            if (all.Count == 0) TryDelete();
             return all;
         }
     }
 
-    /// <summary>Unfreezes every frozen copy of the program. Returns how many resumed.</summary>
-    public static int Resume(string exePath)
+    /// <summary>
+    /// Unfreezes every frozen copy. Each thread is resumed until it's really running (a copy frozen twice needs two),
+    /// and copies that fail stay on the list so you can try again. Returns (resumed, failed).
+    /// </summary>
+    public static (int Resumed, int Failed) Resume(string exePath)
     {
         lock (Gate)
         {
             List<Entry> all = LoadAlive();
             Entry? entry = all.FirstOrDefault(e => e.ExePath.Equals(exePath, StringComparison.OrdinalIgnoreCase));
-            if (entry == null) return 0;
+            if (entry == null) return (0, 0);
             int resumed = 0;
-            foreach (FrozenCopy c in entry.Copies)
+            entry.Copies.RemoveAll(c =>
             {
                 try
                 {
-                    if (Call(c.Pid, NtResumeProcess) == 0) resumed++;
+                    ResumeFully(c.Pid);
+                    resumed++;
+                    return true;
+                }
+                catch (ArgumentException)
+                {
+                    return true; // already gone
                 }
                 catch (Exception ex)
                 {
                     Log.Error($"Resuming pid {c.Pid} failed", ex);
+                    return false;
                 }
-            }
-            all.Remove(entry);
+            });
+            int failed = entry.Copies.Count;
+            if (failed == 0) all.Remove(entry);
             Save(all);
-            Log.Info($"Resumed {resumed} cop(ies) of {exePath}");
-            return resumed;
+            Log.Info($"Resumed {resumed} cop(ies) of {exePath}, {failed} failed");
+            return (resumed, failed);
         }
     }
 
-    /// <summary>Ends every frozen copy of the program. Returns how many were ended.</summary>
-    public static int Kill(string exePath)
+    /// <summary>Ends every frozen copy. Copies that can't be ended stay on the list. Returns (ended, failed).</summary>
+    public static (int Ended, int Failed) Kill(string exePath)
     {
         lock (Gate)
         {
             List<Entry> all = LoadAlive();
             Entry? entry = all.FirstOrDefault(e => e.ExePath.Equals(exePath, StringComparison.OrdinalIgnoreCase));
-            if (entry == null) return 0;
-            int killed = 0;
-            foreach (FrozenCopy c in entry.Copies)
+            if (entry == null) return (0, 0);
+            int ended = 0;
+            entry.Copies.RemoveAll(c =>
             {
                 try
                 {
                     using Process p = Process.GetProcessById(c.Pid);
                     p.Kill();
-                    killed++;
+                    ended++;
+                    return true;
+                }
+                catch (ArgumentException)
+                {
+                    return true; // already gone
                 }
                 catch (Exception ex)
                 {
                     Log.Error($"Ending frozen pid {c.Pid} failed", ex);
+                    return false;
+                }
+            });
+            int failed = entry.Copies.Count;
+            if (failed == 0) all.Remove(entry);
+            Save(all);
+            return (ended, failed);
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenThread(uint access, bool inherit, int threadId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern int ResumeThread(IntPtr thread);
+
+    private static void ResumeFully(int pid)
+    {
+        using Process p = Process.GetProcessById(pid); // ArgumentException if it exited
+        const uint THREAD_SUSPEND_RESUME = 0x0002;
+        foreach (ProcessThread t in p.Threads)
+        {
+            using (t)
+            {
+                IntPtr h = OpenThread(THREAD_SUSPEND_RESUME, false, t.Id);
+                if (h == IntPtr.Zero) continue; // thread just ended
+                try
+                {
+                    // ResumeThread returns the count before the call: keep going until it was 1 (now running) or 0.
+                    for (int i = 0; i < 16; i++)
+                    {
+                        int before = ResumeThread(h);
+                        if (before <= 1) break;
+                    }
+                }
+                finally
+                {
+                    CloseHandle(h);
                 }
             }
-            all.Remove(entry);
-            Save(all);
-            return killed;
         }
     }
 
@@ -177,7 +229,10 @@ internal static class ProcessFreezer
         }
     }
 
-    /// <summary>Saved list, minus copies that exited (a reused PID won't match the saved start time).</summary>
+    /// <summary>
+    /// Saved list, minus copies that really exited (a reused PID won't match the saved start time). A copy Windows
+    /// won't tell us about (access denied) is kept: dropping it would leave it frozen with no way to resume it.
+    /// </summary>
     private static List<Entry> LoadAlive()
     {
         List<Entry> all;
@@ -194,20 +249,35 @@ internal static class ProcessFreezer
         {
             e.Copies.RemoveAll(c =>
             {
+                Process p;
                 try
                 {
-                    using Process p = Process.GetProcessById(c.Pid);
-                    return Math.Abs((p.StartTime.ToUniversalTime() - c.StartUtc).TotalSeconds) > 2 ||
-                           !string.Equals(NativeMethods.GetProcessPath(c.Pid), e.ExePath, StringComparison.OrdinalIgnoreCase);
+                    p = Process.GetProcessById(c.Pid);
                 }
-                catch (Exception)
+                catch (ArgumentException)
                 {
                     return true; // exited
+                }
+                using (p)
+                {
+                    try
+                    {
+                        return Math.Abs((p.StartTime.ToUniversalTime() - c.StartUtc).TotalSeconds) > 2; // PID reused
+                    }
+                    catch (Exception)
+                    {
+                        return false; // can't read it: keep it rather than lose track of a frozen program
+                    }
                 }
             });
         }
         all.RemoveAll(e => e.Copies.Count == 0);
         return all;
+    }
+
+    private static void TryDelete()
+    {
+        try { File.Delete(StatePath); } catch (Exception) { /* not important */ }
     }
 
     private static void Save(List<Entry> all)

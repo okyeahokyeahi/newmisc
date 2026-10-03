@@ -92,6 +92,22 @@ internal static class DownloadsTidy
 
     public static bool CanUndo => Load().Batches.Count > 0;
 
+    /// <summary>Files put back into Downloads by the tidy helper's undo: leave them alone for 30 days.</summary>
+    public static void KeepForAWhile(IEnumerable<string> paths)
+    {
+        lock (Gate)
+        {
+            Journal journal = Load();
+            bool any = false;
+            foreach (string p in paths.Where(p => string.Equals(Path.GetDirectoryName(p), DownloadsWatcher.DownloadsFolder.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)))
+            {
+                journal.KeepUntil[p] = DateTime.Now.AddDays(30);
+                any = true;
+            }
+            if (any) Save(journal);
+        }
+    }
+
     /// <summary>Puts the last batch back. Returns (moved back, skipped because the spot is taken or the file is gone).</summary>
     public static (int Restored, int Skipped) UndoLast()
     {

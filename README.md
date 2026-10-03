@@ -35,7 +35,7 @@ Acer Nitro AN515-57 but runs on any Windows 10/11 PC.
 | **Weekly health report** | Once a week (or tray menu → *Weekly health report*): this week vs last for RAM, heat slowdown, games played, Windows startup time, free disk space, battery wear, and how much space game clips take. Optional AI summary. |
 | **Late-night nudge** (off by default) | After a game that ends late, the game-over notification mentions the time. |
 | **Settings window** | Tray menu → *Settings…*: every option in tabs (General, Alerts, Security, Games, AI), no file editing. |
-| **Tidy helper** | Tray menu → *Tidy* (or the quick panel): groups loose files on your Desktop and in Downloads (installers, zips, pictures, videos, documents, Roblox files, shortcuts, exact duplicates…) and moves the groups you tick into a `Tidied` folder next to them. Never moves folders, never touches Documents, never deletes, skips files from the last 24 hours, and every tidy can be undone. With an API key, *Ask AI* weighs the pros and cons of each group and whether moving could break anything. |
+| **Tidy helper** | Tray menu → *Tidy* (or the quick panel): groups loose files on your Desktop and in Downloads (installers, zips, pictures, videos, documents, Roblox files, shortcuts, exact duplicates…) and moves the groups you tick (programs on the Desktop, Roblox files, shortcuts and "other" start unticked) into a `Tidied` folder next to them. Never moves folders, never touches Documents, never deletes, skips files from the last 24 hours, and every tidy can be undone. With an API key, *Ask AI* weighs the pros and cons of each group and whether moving could break anything. |
 | **Downloads auto-tidy** (off by default) | Weekly, moves files older than 14 days into `Downloads\Older\<year-month>`. Never deletes, and every tidy can be undone (tray menu → *Downloads tidy*). |
 
 Right-click the tray icon for the menu, or double-click it for the live status window.
@@ -77,7 +77,7 @@ This is a fan homage. The visuals are original and no assets from the show are i
   game reports; *Is this safe?* on a recent download in the quick panel; and **Ask about something on screen** (Ctrl+Alt+S):
   drag a box around an error or setting, check the preview, then send it with your question.
 - **What's sent:** program names and numbers only (temperatures, RAM, the busiest apps), plus a screenshot only when you
-  pick one yourself and press Ask, and file names in the tidy helper only when *Include file names* is ticked and you press *Ask AI*. Never window titles, files, the clipboard or your username. Click *What gets sent?* in the
+  pick one yourself and press Ask, and file names in the tidy helper only when you tick *Let Ask AI see up to 15 file names* (off by default) and press *Ask AI*. Never window titles, files, the clipboard or your username. Click *What gets sent?* in the
   chat window to see it. Every AI question starts with you pressing a button; nothing is sent in the background.
 - **What it can do:** in Ask Buddy you can say things like "close Chrome", "pause alerts for an hour", "keep it awake for 3 hours",
   "open Sound settings" or "empty the recycle bin". Only those six kinds of action exist, and **every one asks you Yes/No

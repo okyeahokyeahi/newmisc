@@ -40,6 +40,12 @@ public sealed class SuspiciousProcessScanner(Settings settings)
     }
 
     /// <summary>Called from the UI thread after you dealt with a program, so it can be reported again later.</summary>
+    /// <summary>Treat as already reported (e.g. a program you froze before Buddy restarted).</summary>
+    public void MarkReported(string exePath)
+    {
+        lock (_allowedGate) _alreadyReported.Add(exePath);
+    }
+
     public void ForgetReport(string exePath)
     {
         lock (_allowedGate) _alreadyReported.Remove(exePath);

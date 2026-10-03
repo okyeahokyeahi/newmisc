@@ -22,6 +22,8 @@ public sealed class MagiCase
     public required string IfDenied { get; init; }
     public required IReadOnlyList<MagiAction> Actions { get; init; }
     public bool Security { get; init; }
+    /// <summary>No separate DISMISS button (the case has its own "no" button; closing still means no).</summary>
+    public bool HideDismiss { get; init; }
 
     public CoreVote Vote(Core c) => c switch { Core.Melchior => Melchior, Core.Balthasar => Balthasar, _ => Casper };
     public int Yes => new[] { Melchior, Balthasar, Casper }.Count(v => v.Approve);
