@@ -16,7 +16,8 @@ internal sealed class ExplainForm : Form
     private readonly Button _askButton;
     private readonly CancellationTokenSource _closing = new();
 
-    public ExplainForm(BuddyServices services, string name, string? path, IReadOnlyList<string>? reasons)
+    public ExplainForm(BuddyServices services, string name, string? path, IReadOnlyList<string>? reasons,
+        (string Label, Action Run)? extra = null)
     {
         _s = services;
         _name = name;
@@ -33,7 +34,9 @@ internal sealed class ExplainForm : Form
         var padded = new Panel { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 16, 4) };
         padded.Controls.Add(_text);
         Controls.Add(padded);
-        Controls.Add(Ui.ButtonRow(close, _askButton, showFile));
+        var row = Ui.ButtonRow(close, _askButton, showFile);
+        if (extra is var (label, run)) row.Controls.Add(Ui.Button(label, (_, _) => run()));
+        Controls.Add(row);
         Load += (_, _) => Fill();
         FormClosed += (_, _) =>
         {

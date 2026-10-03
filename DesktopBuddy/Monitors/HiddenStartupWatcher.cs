@@ -8,7 +8,7 @@ namespace DesktopBuddy.Monitors;
 /// <summary>Where a new auto-start entry was found, so the alert can open the right Windows tool.</summary>
 public enum StartupPlace { ScheduledTask, Service, StartupFolder, Winlogon }
 
-public sealed record HiddenStartupAlert(StartupPlace Place, string Title, string Message);
+public sealed record HiddenStartupAlert(StartupPlace Place, string Title, string Message, string? ExePath = null, string? Reason = null);
 
 /// <summary>
 /// Info-stealers mostly hide in scheduled tasks and services now, not the Run keys. This watches
@@ -118,7 +118,9 @@ public sealed class HiddenStartupWatcher
         if (reason == null) return; // looks like a normal updater; logged above
 
         Alert?.Invoke(new HiddenStartupAlert(place, "Something set itself to auto-start",
-            $"{what} {reason}: {Short(command, 80)}. Info-stealers hide like this. Didn't install anything? Click to review."));
+            $"{what} {reason}: {Short(command, 80)}. Info-stealers hide like this. Didn't install anything? Click to see what it is.",
+            // Script hosts (PowerShell etc.) are Windows' own files; the danger is in what they're told to run, so no "what is this file" view.
+            ScriptHosts.Contains(exeName) || !File.Exists(exe) ? null : exe, $"{what} {reason}."));
     }
 
     private void CheckWinlogon()

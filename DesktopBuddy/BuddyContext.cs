@@ -32,6 +32,7 @@ internal sealed class BuddyContext : ApplicationContext
     private bool MagiTheme => _settings.Theme.Equals("magi", StringComparison.OrdinalIgnoreCase);
     private Hotkey? _hotkey;
     private Hotkey? _screenHotkey;
+    private Hotkey? _audioHotkey;
     private QuickPanel? _quickPanel;
     private DateTime _quickPanelClosedAt;
     private bool _gameJustEnded;
@@ -131,7 +132,12 @@ internal sealed class BuddyContext : ApplicationContext
         _scanner.Flagged += item => OnUi(() => EnqueueSuspicious(item));
         _defender.Alert += (title, text, critical) => OnUi(() =>
             Notify(title, text, critical: critical, onClick: () => OpenUri("windowsdefender://threatsettings")));
-        _hiddenStartup.Alert += alert => OnUi(() => Notify(alert.Title, alert.Message, critical: true, onClick: () => OpenStartupPlace(alert.Place)));
+        _hiddenStartup.Alert += alert => OnUi(() => Notify(alert.Title, alert.Message, critical: true,
+            onClick: alert.ExePath == null
+                ? () => OpenStartupPlace(alert.Place)
+                : () => new ExplainForm(_services, Path.GetFileNameWithoutExtension(alert.ExePath), alert.ExePath,
+                    [alert.Reason ?? "Set itself to start automatically."],
+                    (alert.Place == StartupPlace.Service ? "Open Services" : "Open Task Scheduler", () => OpenStartupPlace(alert.Place))).Show()));
         _games.SessionEnded += report => OnUi(() => OnGameEnded(report));
         _games.SessionStarted += _ => OnUi(OnGameStarted);
         _games.GameStopped += () => OnUi(OnGameStopped);
@@ -211,6 +217,7 @@ internal sealed class BuddyContext : ApplicationContext
         _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ToggleQuickPanel(); };
         _hotkey = new Hotkey(Keys.B, ToggleQuickPanel);
         _screenHotkey = new Hotkey(Keys.S, () => _services.ShowScreenAsk());
+        SyncAudioHotkey();
         // Windows only says "a balloon was clicked", not which one. Older ones clicked later from the
         // notification centre could run the wrong action, so after a minute a click just opens the status window.
         _tray.BalloonTipClicked += (_, _) =>
@@ -669,9 +676,44 @@ internal sealed class BuddyContext : ApplicationContext
                       (throttled ? " · slowed down from heat" : "") +
                       (report.Network?.Spikes > 3 ? $" · {report.Network.Spikes} lag spikes" : "") +
                       (report.HeldAlerts.Count > 0 ? $" · {report.HeldAlerts.Count} alert(s) waiting" : "") +
+                      (IsLateNight() ? $". It's {DateTime.Now:HH:mm}, good moment to call it a night" : "") +
                       ". Click for the report.";
         Notify($"Game over: {Diagnosis.FriendlyName(report.Game)}", text, throttled || report.HeldAlerts.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info,
             onClick: () => new GameReportForm(report, _settings, ShowAsk).Show());
+    }
+
+    /// <summary>Opt-in: "late" runs from Settings.LateNightHour until 5 am.</summary>
+    private bool IsLateNight()
+    {
+        if (!_settings.LateNightNudge) return false;
+        int hour = DateTime.Now.Hour, from = Math.Clamp(_settings.LateNightHour, 0, 23);
+        return from >= 5 ? hour >= from || hour < 5 : hour >= from && hour < 5;
+    }
+
+    private void SyncAudioHotkey()
+    {
+        if (_settings.AudioHotkey && _audioHotkey == null) _audioHotkey = new Hotkey(Keys.A, SwitchAudioOutput);
+        else if (!_settings.AudioHotkey && _audioHotkey != null)
+        {
+            _audioHotkey.Dispose();
+            _audioHotkey = null;
+        }
+    }
+
+    private void SwitchAudioOutput()
+    {
+        try
+        {
+            string? now = AudioSwitch.Next();
+            Notify(now != null ? "Sound output switched" : "Only one sound output",
+                now != null ? $"Sound now plays on: {now}" : "Plug in your headset (or turn on the speakers) and press Ctrl+Alt+A again.",
+                ToolTipIcon.Info, critical: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Switching sound output failed", ex);
+            Notify("Couldn't switch sound output", "Use the speaker icon on the taskbar instead (details are in the log).", ToolTipIcon.Info, critical: true);
+        }
     }
 
     private void OnIdleHogs(IReadOnlyList<IdleHogFinding> findings)
@@ -1012,6 +1054,7 @@ internal sealed class BuddyContext : ApplicationContext
     private void AfterSettingsSaved()
     {
         _ = Task.Run(() => Autostart.Sync(_settings));
+        SyncAudioHotkey();
         RefreshMenuChecks();
     }
 
@@ -1131,6 +1174,7 @@ internal sealed class BuddyContext : ApplicationContext
         _hotkey?.Dispose();
         _sounds.Dispose();
         _screenHotkey?.Dispose();
+        _audioHotkey?.Dispose();
         if (KeepAwake.Until != null) KeepAwake.Set(null);
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         Microsoft.Win32.SystemEvents.SessionEnding -= OnSessionEnding;
