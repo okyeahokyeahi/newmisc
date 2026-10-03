@@ -26,6 +26,8 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly ReminderStore _reminders = new();
     private readonly LaptopCareMonitor _care = new();
     private readonly StudioCrashWatcher _studio;
+    private readonly HealthLog _health;
+    private WeeklyReportForm? _weeklyForm;
     private readonly SoundBank _sounds;
     private bool MagiTheme => _settings.Theme.Equals("magi", StringComparison.OrdinalIgnoreCase);
     private Hotkey? _hotkey;
@@ -80,6 +82,7 @@ internal sealed class BuddyContext : ApplicationContext
         _restart = new RestartMonitor(_games);
         _sounds = new SoundBank(settings, () => _games.InSession);
         _studio = new StudioCrashWatcher(settings);
+        _health = new HealthLog(settings, _resources, _temps, _heat, _disk, _care);
         _studio.Crashed += crash => OnUi(() => Notify("Roblox Studio closed unexpectedly",
             crash.RecoveryFile != null
                 ? $"Your latest recovery copy is {Path.GetFileName(crash.RecoveryFile)} ({File.GetLastWriteTime(crash.RecoveryFile):HH:mm}). " +
@@ -113,7 +116,7 @@ internal sealed class BuddyContext : ApplicationContext
             Reminders = _reminders,
             ShowScreenAsk = () => ScreenAsk.Start(_services!),
             ShowSettings = ShowSettings,
-            ShowWeeklyReport = () => { }, // filled in by the weekly report feature
+            ShowWeeklyReport = ShowWeeklyReport,
             PauseAlerts = minutes => { _pausedUntil = DateTime.Now.AddMinutes(minutes); UiTick(); },
         };
 
@@ -167,6 +170,7 @@ internal sealed class BuddyContext : ApplicationContext
         menu.Items.Add("Ask Buddy…", null, (_, _) => ShowAsk(null));
         menu.Items.Add("Ask about something on screen (Ctrl+Alt+S)", null, (_, _) => _services.ShowScreenAsk());
         menu.Items.Add("Get game-ready…", null, (_, _) => _services.ShowGameReady());
+        menu.Items.Add("Weekly health report", null, (_, _) => ShowWeeklyReport());
         menu.Items.Add(_pauseItem);
         menu.Items.Add(new ToolStripSeparator());
         var startWithWindows = _startWithWindowsItem = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = settings.StartWithWindows };
@@ -245,6 +249,18 @@ internal sealed class BuddyContext : ApplicationContext
 
     private bool Paused => DateTime.Now < _pausedUntil;
 
+    private void ShowWeeklyReport()
+    {
+        if (_weeklyForm is { IsDisposed: false })
+        {
+            _weeklyForm.Activate();
+            return;
+        }
+        _weeklyForm = new WeeklyReportForm(_services, _health);
+        _weeklyForm.FormClosed += (_, _) => _weeklyForm = null;
+        _weeklyForm.Show();
+    }
+
     // ---------- Background loop ----------
     private async Task MonitorLoop(CancellationToken token)
     {
@@ -262,6 +278,7 @@ internal sealed class BuddyContext : ApplicationContext
             Safe("Studio crash watcher", () => _studio.Tick((_resources.Latest?.AllApps ?? []).Select(a => a.Name)));
             Safe("idle hog watcher", () => _idleHogs.Tick(_games.InSession));
             if (_settings.WatchGraphicsChip) Safe("graphics chip watcher", _gpuChoice.Tick);
+            Safe("health log", _health.Tick);
 
             if (_settings.ScanForSuspiciousProcesses && now >= nextScan)
             {
@@ -273,6 +290,13 @@ internal sealed class BuddyContext : ApplicationContext
                 if (_settings.WatchDefender) Safe("Defender monitor", _defender.Tick);
                 if (_settings.WatchHiddenStartup) Safe("hidden startup watcher", _hiddenStartup.Tick);
                 Safe("restart monitor", _restart.Tick);
+                if (!_games.InSession && _health.WeeklyNoticeDue())
+                {
+                    _health.MarkWeeklyNoticeShown();
+                    _ui.Post(_ => Notify("Your weekly health report is ready",
+                        "How your laptop did this week: memory, heat, games, startup, disk, battery. Click to see it.",
+                        ToolTipIcon.Info, onClick: ShowWeeklyReport), null);
+                }
                 if (DownloadsTidy.DueThisWeek(_settings) && !_games.InSession)
                 {
                     int moved = 0;
@@ -1121,6 +1145,7 @@ internal sealed class BuddyContext : ApplicationContext
         }
         if (loopStopped)
         {
+            _health.Flush();
             _temps.Dispose(); // never close the sensor driver while a read is still running
             _idleHogs.Dispose();
             _gpuChoice.Dispose();

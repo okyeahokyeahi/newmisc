@@ -30,6 +30,8 @@ public sealed class LaptopCareMonitor
 
     /// <summary>Latest boot duration and the usual one, for the status window.</summary>
     public (TimeSpan Last, TimeSpan Usual)? BootTimes { get; private set; }
+    /// <summary>When that latest counted startup happened (local time).</summary>
+    public DateTime? LastBootAt { get; private set; }
     public (string Version, DateTime Date)? NvidiaDriver { get; private set; }
 
     public event Action<CareTip>? Tip;
@@ -150,6 +152,7 @@ public sealed class LaptopCareMonitor
             var previous = boots.Skip(1).Select(b => b.Ms).OrderBy(x => x).ToList();
             double usual = previous.Count > 0 ? previous[previous.Count / 2] : boots[0].Ms;
             BootTimes = (TimeSpan.FromMilliseconds(boots[0].Ms), TimeSpan.FromMilliseconds(usual));
+            LastBootAt = boots[0].When;
 
             var latest = boots[0];
             if (latest.RecordId <= _state!.LastBootRecordSeen) return;

@@ -22,8 +22,18 @@ public sealed class DiskMonitor(Settings settings)
         if (!low || DateTime.UtcNow - _lastAlert < TimeSpan.FromHours(12)) return;
 
         _lastAlert = DateTime.UtcNow;
+        string clips = "";
+        try
+        {
+            if (ClipStorage.Measure() is { TotalBytes: >= 5L * 1024 * 1024 * 1024 } c)
+                clips = $" Game clips and recordings in Videos take {Format.Bytes(c.TotalBytes)}.";
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Measuring clip storage failed", ex);
+        }
         Alert?.Invoke($"Drive {drive.Name.TrimEnd('\\')} is almost full",
-            $"Only {Format.Bytes(FreeBytes.Value)} free. Windows needs room for updates and for spare memory when RAM is full. " +
-            "Click to open Storage settings (\"Cleanup recommendations\" is the quick win).");
+            $"Only {Format.Bytes(FreeBytes.Value)} free. Windows needs room for updates and spare memory." + clips +
+            (clips.Length > 0 ? " Click for Storage settings." : " Click to open Storage settings (\"Cleanup recommendations\" is the quick win)."));
     }
 }

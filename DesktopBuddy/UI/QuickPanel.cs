@@ -54,6 +54,7 @@ internal sealed class QuickPanel : Form
         buttons.Controls.Add(Wide("Ask about screen", () => { Close(); _s.ShowScreenAsk(); }));
         buttons.Controls.Add(Wide("AI setup", () => { Close(); _s.ShowApiKey(); }));
         buttons.Controls.Add(Wide("Settings", () => { Close(); _s.ShowSettings(); }));
+        buttons.Controls.Add(Wide("Weekly report", () => { Close(); _s.ShowWeeklyReport(); }));
         root.Controls.Add(buttons);
 
         root.Controls.Add(Heading("Keep awake"));
