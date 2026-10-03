@@ -98,11 +98,27 @@ public sealed class Settings
     public double MagiVolume { get; set; } = 0.8;
     public bool MagiAiVoices { get; set; } = true;
 
+    // --- Extras ---
+    /// <summary>Ctrl+Alt+A switches the default sound output (and mic) between your devices.</summary>
+    public bool AudioHotkey { get; set; } = true;
+    /// <summary>After Roblox Studio closes unexpectedly, point to the recovery copy and keep extra backups.</summary>
+    public bool StudioCrashHelp { get; set; } = true;
+    /// <summary>Explain Roblox disconnects ("Error 277") in the game report.</summary>
+    public bool RobloxKickExplainer { get; set; } = true;
+    public bool WeeklyReport { get; set; } = true;
+    /// <summary>One quiet message after a game that ends late. Off unless you turn it on.</summary>
+    public bool LateNightNudge { get; set; }
+    public int LateNightHour { get; set; } = 23;
+
     // --- AI (only used once you add an API key) ---
     /// <summary>Claude Haiku 4.5 is the cheapest and plenty for this app; pick another in the AI setup window.</summary>
     public string AiModel { get; set; } = "claude-haiku-4-5";
     public double AiMonthlyBudgetUsd { get; set; } = 2.00;
     public int AiMaxCallsPerDay { get; set; } = 100;
+    /// <summary>Let Ask Buddy offer actions ("close Chrome"); every action still asks you Yes/No.</summary>
+    public bool AiActions { get; set; } = true;
+    /// <summary>Add a short AI-written summary to the weekly report.</summary>
+    public bool AiWeeklySummary { get; set; } = true;
 
     /// <summary>Full exe paths you clicked "Always allow" on.</summary>
     public List<string> AllowedExePaths { get; set; } = [];

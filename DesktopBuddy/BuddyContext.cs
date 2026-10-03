@@ -53,6 +53,8 @@ internal sealed class BuddyContext : ApplicationContext
     private DateTime _pausedUntil = DateTime.MinValue;
     private BuddyMood? _currentMood;
     private Action? _balloonClick;
+    private ToolStripMenuItem _startWithWindowsItem = null!, _classicItem = null!, _magiItem = null!,
+        _magiSoundsItem = null!, _magiVoicesItem = null!, _tidyWeeklyItem = null!;
     private DateTime _balloonShownAt;
     private readonly List<DateTime> _recentDownloadToasts = [];
     private readonly HashSet<string> _scansRunning = new(StringComparer.OrdinalIgnoreCase);
@@ -97,6 +99,7 @@ internal sealed class BuddyContext : ApplicationContext
             ShowStatus = ShowStatus,
             Reminders = _reminders,
             ShowScreenAsk = () => ScreenAsk.Start(_services!),
+            ShowSettings = ShowSettings,
         };
 
         // Monitors run on a background thread; every alert hops to the UI thread here.
@@ -151,7 +154,7 @@ internal sealed class BuddyContext : ApplicationContext
         menu.Items.Add("Get game-ready…", null, (_, _) => _services.ShowGameReady());
         menu.Items.Add(_pauseItem);
         menu.Items.Add(new ToolStripSeparator());
-        var startWithWindows = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = settings.StartWithWindows };
+        var startWithWindows = _startWithWindowsItem = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = settings.StartWithWindows };
         startWithWindows.Click += (_, _) =>
         {
             settings.StartWithWindows = startWithWindows.Checked;
@@ -173,7 +176,7 @@ internal sealed class BuddyContext : ApplicationContext
         _installUpdateItem = new ToolStripMenuItem { Visible = false, Font = new Font(menu.Font, FontStyle.Bold) };
         _installUpdateItem.Click += (_, _) => { if (_availableUpdate != null) ConfirmAndInstall(_availableUpdate); };
         menu.Items.Insert(0, _installUpdateItem);
-        menu.Items.Add("Edit settings (restart to apply)", null, (_, _) => OpenFile("notepad.exe", Settings.FilePath));
+        menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Open log folder", null, (_, _) => OpenFile("explorer.exe", Settings.Folder));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitThread());
@@ -460,8 +463,8 @@ internal sealed class BuddyContext : ApplicationContext
     private ToolStripMenuItem BuildThemeMenu()
     {
         var root = new ToolStripMenuItem("Look && sounds");
-        var classic = new ToolStripMenuItem("Classic theme") { Checked = !MagiTheme };
-        var magi = new ToolStripMenuItem("MAGI theme (Evangelion-style votes)") { Checked = MagiTheme };
+        var classic = _classicItem = new ToolStripMenuItem("Classic theme") { Checked = !MagiTheme };
+        var magi = _magiItem = new ToolStripMenuItem("MAGI theme (Evangelion-style votes)") { Checked = MagiTheme };
         void SetTheme(string theme)
         {
             _settings.Theme = theme;
@@ -475,9 +478,9 @@ internal sealed class BuddyContext : ApplicationContext
             SetTheme("magi");
             ShowMagi(MagiCases.Test(() => { }));
         };
-        var sounds = new ToolStripMenuItem("MAGI sounds") { CheckOnClick = true, Checked = _settings.MagiSounds };
+        var sounds = _magiSoundsItem = new ToolStripMenuItem("MAGI sounds") { CheckOnClick = true, Checked = _settings.MagiSounds };
         sounds.Click += (_, _) => { _settings.MagiSounds = sounds.Checked; _settings.Save(); };
-        var voices = new ToolStripMenuItem("AI voices for the cores (uses your API key)") { CheckOnClick = true, Checked = _settings.MagiAiVoices };
+        var voices = _magiVoicesItem = new ToolStripMenuItem("AI voices for the cores (uses your API key)") { CheckOnClick = true, Checked = _settings.MagiAiVoices };
         voices.Click += (_, _) => { _settings.MagiAiVoices = voices.Checked; _settings.Save(); };
 
         root.DropDownItems.Add(classic);
@@ -912,7 +915,7 @@ internal sealed class BuddyContext : ApplicationContext
     private ToolStripMenuItem BuildTidyMenu()
     {
         var root = new ToolStripMenuItem("Downloads tidy");
-        var weekly = new ToolStripMenuItem($"Tidy weekly (files older than {_settings.TidyAfterDays} days)") { Checked = _settings.TidyDownloads };
+        var weekly = _tidyWeeklyItem = new ToolStripMenuItem($"Tidy weekly (files older than {_settings.TidyAfterDays} days)") { Checked = _settings.TidyDownloads };
         weekly.Click += (_, _) =>
         {
             if (!_settings.TidyDownloads)
@@ -946,6 +949,42 @@ internal sealed class BuddyContext : ApplicationContext
         _ui.Post(_ => Notify("Tidy undone", $"Put {restored} file(s) back in Downloads." + (skipped > 0 ? $" {skipped} couldn't be (moved or renamed since)." : ""),
             ToolTipIcon.Info, critical: true), null);
     });
+
+    // ---------- Settings ----------
+    private SettingsForm? _settingsForm;
+
+    private void ShowSettings()
+    {
+        if (_settingsForm is { IsDisposed: false })
+        {
+            _settingsForm.Activate();
+            return;
+        }
+        _settingsForm = new SettingsForm(_settings, AfterSettingsSaved, () =>
+        {
+            SettingsForm.ScheduleRelaunch();
+            ExitThread();
+        });
+        _settingsForm.FormClosed += (_, _) => _settingsForm = null;
+        _settingsForm.Show();
+    }
+
+    private void AfterSettingsSaved()
+    {
+        _ = Task.Run(() => Autostart.Sync(_settings));
+        RefreshMenuChecks();
+    }
+
+    /// <summary>Tray menu ticks follow the settings (they can change from the Settings window).</summary>
+    private void RefreshMenuChecks()
+    {
+        _startWithWindowsItem.Checked = _settings.StartWithWindows;
+        _classicItem.Checked = !MagiTheme;
+        _magiItem.Checked = MagiTheme;
+        _magiSoundsItem.Checked = _settings.MagiSounds;
+        _magiVoicesItem.Checked = _settings.MagiAiVoices;
+        _tidyWeeklyItem.Checked = _settings.TidyDownloads;
+    }
 
     // ---------- Windows ----------
     private void ToggleQuickPanel()

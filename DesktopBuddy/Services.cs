@@ -27,6 +27,7 @@ internal sealed class BuddyServices
     public required Action ShowStatus { get; init; }
     public required ReminderStore Reminders { get; init; }
     public required Action ShowScreenAsk { get; init; }
+    public required Action ShowSettings { get; init; }
 
     /// <summary>The most recent notification ("title: text"), so you can ask Buddy what it meant.</summary>
     public string? LastAlert { get; set; }

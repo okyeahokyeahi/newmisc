@@ -32,7 +32,7 @@ internal sealed class QuickPanel : Form
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = SystemColors.Window;
-        ClientSize = new Size(380, 660);
+        ClientSize = new Size(380, 700);
         KeyPreview = true;
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) Close(); };
         Deactivate += (_, _) => Close();
@@ -53,6 +53,7 @@ internal sealed class QuickPanel : Form
         buttons.Controls.Add(Wide("Full window", () => { Close(); _s.ShowStatus(); }));
         buttons.Controls.Add(Wide("Ask about screen", () => { Close(); _s.ShowScreenAsk(); }));
         buttons.Controls.Add(Wide("AI setup", () => { Close(); _s.ShowApiKey(); }));
+        buttons.Controls.Add(Wide("Settings", () => { Close(); _s.ShowSettings(); }));
         root.Controls.Add(buttons);
 
         root.Controls.Add(Heading("Keep awake"));
