@@ -26,7 +26,7 @@ internal sealed class BuddyActions(BuddyServices s, Action<int> pauseAlerts)
 
     private static readonly string[] Pages = ["storage", "startup_apps", "display", "sound", "power", "windows_update", "virus_protection", "notifications", "task_manager", "graphics"];
     private static readonly string[] Durations = ["off", "1_hour", "3_hours", "until_turned_off"];
-    private static readonly string[] Tools = ["get_game_ready", "slow_or_loud_check", "settings", "weekly_report"];
+    private static readonly string[] Tools = ["get_game_ready", "slow_or_loud_check", "settings", "weekly_report", "tidy_helper"];
 
     public IReadOnlyList<BetaTool> Definitions { get; } =
     [
@@ -155,6 +155,7 @@ internal sealed class BuddyActions(BuddyServices s, Action<int> pauseAlerts)
             "slow_or_loud_check" => ("the \"Why is it slow or loud?\" check", s.ShowDiagnosis),
             "settings" => ("Desktop Buddy settings", s.ShowSettings),
             "weekly_report" => ("the weekly health report", s.ShowWeeklyReport),
+            "tidy_helper" => ("the tidy helper (Desktop and Downloads)", s.ShowTidy),
             _ => null,
         };
         if (choice is not var (label, open)) return "✖ Unknown tool.";

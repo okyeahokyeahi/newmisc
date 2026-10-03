@@ -29,6 +29,7 @@ internal sealed class BuddyServices
     public required Action ShowScreenAsk { get; init; }
     public required Action ShowSettings { get; init; }
     public required Action ShowWeeklyReport { get; init; }
+    public required Action ShowTidy { get; init; }
     public required Action<int> PauseAlerts { get; init; }
     /// <summary>Shows a MAGI vote and waits until it's closed (used for Ask Buddy's actions).</summary>
     public required Action<Magi.MagiCase> ShowMagiModal { get; init; }

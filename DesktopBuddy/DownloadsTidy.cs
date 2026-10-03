@@ -128,7 +128,7 @@ internal static class DownloadsTidy
         return (restored, skipped);
     }
 
-    private static string FreeName(string path)
+    internal static string FreeName(string path)
     {
         if (!File.Exists(path)) return path;
         string dir = Path.GetDirectoryName(path)!, name = Path.GetFileNameWithoutExtension(path), ext = Path.GetExtension(path);
@@ -139,7 +139,7 @@ internal static class DownloadsTidy
         }
     }
 
-    private static bool IsLocked(string file)
+    internal static bool IsLocked(string file)
     {
         try
         {

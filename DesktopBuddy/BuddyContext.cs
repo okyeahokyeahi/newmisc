@@ -28,6 +28,7 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly StudioCrashWatcher _studio;
     private readonly HealthLog _health;
     private WeeklyReportForm? _weeklyForm;
+    private TidyForm? _tidyForm;
     private readonly SoundBank _sounds;
     private bool MagiTheme => _settings.Theme.Equals("magi", StringComparison.OrdinalIgnoreCase);
     private Hotkey? _hotkey;
@@ -118,6 +119,7 @@ internal sealed class BuddyContext : ApplicationContext
             ShowSettings = ShowSettings,
             ShowWeeklyReport = ShowWeeklyReport,
             ShowMagiModal = ShowMagiModal,
+            ShowTidy = ShowTidy,
             PauseAlerts = minutes => { _pausedUntil = DateTime.Now.AddMinutes(minutes); UiTick(); },
         };
 
@@ -257,6 +259,18 @@ internal sealed class BuddyContext : ApplicationContext
     }
 
     private bool Paused => DateTime.Now < _pausedUntil;
+
+    private void ShowTidy()
+    {
+        if (_tidyForm is { IsDisposed: false })
+        {
+            _tidyForm.Activate();
+            return;
+        }
+        _tidyForm = new TidyForm(_services);
+        _tidyForm.FormClosed += (_, _) => _tidyForm = null;
+        _tidyForm.Show();
+    }
 
     private void ShowWeeklyReport()
     {
@@ -1051,8 +1065,10 @@ internal sealed class BuddyContext : ApplicationContext
     // ---------- Downloads tidy ----------
     private ToolStripMenuItem BuildTidyMenu()
     {
-        var root = new ToolStripMenuItem("Downloads tidy");
-        var weekly = _tidyWeeklyItem = new ToolStripMenuItem($"Tidy weekly (files older than {_settings.TidyAfterDays} days)") { Checked = _settings.TidyDownloads };
+        var root = new ToolStripMenuItem("Tidy");
+        root.DropDownItems.Add(new ToolStripMenuItem("Tidy helper (Desktop && Downloads)…", null, (_, _) => ShowTidy()) { Font = new Font(root.Font, FontStyle.Bold) });
+        root.DropDownItems.Add(new ToolStripSeparator());
+        var weekly = _tidyWeeklyItem = new ToolStripMenuItem($"Auto-tidy Downloads weekly (files older than {_settings.TidyAfterDays} days)") { Checked = _settings.TidyDownloads };
         weekly.Click += (_, _) =>
         {
             if (!_settings.TidyDownloads)
@@ -1068,13 +1084,13 @@ internal sealed class BuddyContext : ApplicationContext
             weekly.Checked = _settings.TidyDownloads;
         };
         root.DropDownItems.Add(weekly);
-        root.DropDownItems.Add("Tidy now", null, (_, _) => _ = Task.Run(() =>
+        root.DropDownItems.Add("Auto-tidy Downloads now", null, (_, _) => _ = Task.Run(() =>
         {
             int moved = DownloadsTidy.Run(_settings);
             _ui.Post(_ => Notify("Downloads tidied", moved > 0 ? $"Moved {moved} old file(s) into Downloads\\Older. Click to undo." : "Nothing old enough to move.",
                 ToolTipIcon.Info, critical: true, onClick: moved > 0 ? UndoTidy : null), null);
         }));
-        var undo = new ToolStripMenuItem("Undo last tidy", null, (_, _) => UndoTidy());
+        var undo = new ToolStripMenuItem("Undo last Downloads auto-tidy", null, (_, _) => UndoTidy());
         root.DropDownOpening += (_, _) => undo.Enabled = DownloadsTidy.CanUndo;
         root.DropDownItems.Add(undo);
         return root;
