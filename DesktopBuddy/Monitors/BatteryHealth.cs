@@ -31,7 +31,8 @@ public static class BatteryHealth
     {
         using var searcher = new ManagementObjectSearcher(@"root\wmi", query);
         double total = 0;
-        foreach (ManagementBaseObject o in searcher.Get())
+        using ManagementObjectCollection results = searcher.Get();
+        foreach (ManagementBaseObject o in results)
         {
             using (o)
             {

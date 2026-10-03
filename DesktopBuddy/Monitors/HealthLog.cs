@@ -44,6 +44,7 @@ public sealed class HealthLog(Settings settings, ResourceMonitor resources, Temp
     private readonly object _gate = new();
     private Store? _store;
     private DateTime _lastTick = DateTime.UtcNow, _lastSave = DateTime.UtcNow;
+    private TimeSpan? _lastCpuToday, _lastGpuToday;
 
     /// <summary>Called every monitoring loop pass (a few seconds apart).</summary>
     public void Tick()
@@ -73,9 +74,10 @@ public sealed class HealthLog(Settings settings, ResourceMonitor resources, Temp
             }
             if (heat.Latest is { } h)
             {
-                // The heat monitor keeps its own "today" totals; it resets at midnight like we do.
-                day.CpuSlowSeconds = Math.Max(day.CpuSlowSeconds, h.CpuToday.TotalSeconds);
-                day.GpuSlowSeconds = Math.Max(day.GpuSlowSeconds, h.GpuToday.TotalSeconds);
+                // The heat monitor's "today" totals restart at 0 at midnight and whenever Buddy restarts,
+                // so add what's new since the last look instead of copying the total.
+                day.CpuSlowSeconds += Growth(ref _lastCpuToday, h.CpuToday);
+                day.GpuSlowSeconds += Growth(ref _lastGpuToday, h.GpuToday);
             }
             if (disk.FreeBytes is long free) day.DiskFreeGb = free / (1024d * 1024 * 1024);
             if (care.LastBootAt is DateTime bootAt && care.BootTimes is var (last, _))
@@ -169,9 +171,18 @@ public sealed class HealthLog(Settings settings, ResourceMonitor resources, Temp
         }
         catch (Exception ex)
         {
-            Log.Error("Reading the health log failed; starting a fresh one", ex);
+            Log.Error("Reading the health log failed; starting a fresh one (old copy kept as .bad)", ex);
+            try { File.Copy(FilePath, FilePath + ".bad", overwrite: true); } catch (Exception) { /* best effort */ }
         }
         return new Store();
+    }
+
+    private static double Growth(ref TimeSpan? last, TimeSpan now)
+    {
+        TimeSpan? before = last;
+        last = now;
+        if (before is not TimeSpan b) return now.TotalSeconds; // first look since start: counter started with us
+        return now >= b ? (now - b).TotalSeconds : now.TotalSeconds; // went down = it was reset
     }
 
     private static double? Max(double? a, double? b) => a == null ? b : b == null ? a : Math.Max(a.Value, b.Value);

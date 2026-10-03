@@ -56,7 +56,7 @@ internal sealed class SettingsForm : Form
         add(Check("Ctrl+Alt+A switches headset / speakers ↻", () => _settings.AudioHotkey, v => _settings.AudioHotkey = v));
         add(Check("Weekly health report", () => _settings.WeeklyReport, v => _settings.WeeklyReport = v));
         add(Check("Late-night nudge after games", () => _settings.LateNightNudge, v => _settings.LateNightNudge = v));
-        add(Number("…counts as late from (hour, 0-23)", 0, 23, () => _settings.LateNightHour, v => _settings.LateNightHour = (int)v));
+        add(Number("…counts as late from (24-hour clock, e.g. 23)", 0, 23, () => _settings.LateNightHour, v => _settings.LateNightHour = (int)v));
         add(Heading("Downloads tidy"));
         add(Check("Tidy Downloads weekly (moves, never deletes)", () => _settings.TidyDownloads, v => _settings.TidyDownloads = v));
         add(Number("…files older than (days)", 1, 365, () => _settings.TidyAfterDays, v => _settings.TidyAfterDays = (int)v));

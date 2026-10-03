@@ -299,10 +299,14 @@ internal sealed class BuddyContext : ApplicationContext
                 Safe("restart monitor", _restart.Tick);
                 if (!_games.InSession && _health.WeeklyNoticeDue())
                 {
-                    _health.MarkWeeklyNoticeShown();
-                    _ui.Post(_ => Notify("Your weekly health report is ready",
-                        "How your laptop did this week: memory, heat, games, startup, disk, battery. Click to see it.",
-                        ToolTipIcon.Info, onClick: ShowWeeklyReport), null);
+                    _ui.Post(_ =>
+                    {
+                        if (Paused || _games.InSession) return; // try again next minute instead of losing it for a week
+                        _health.MarkWeeklyNoticeShown();
+                        Notify("Your weekly health report is ready",
+                            "How your laptop did this week: memory, heat, games, startup, disk, battery. Click to see it.",
+                            ToolTipIcon.Info, onClick: ShowWeeklyReport);
+                    }, null);
                 }
                 if (DownloadsTidy.DueThisWeek(_settings) && !_games.InSession)
                 {
@@ -431,6 +435,7 @@ internal sealed class BuddyContext : ApplicationContext
     /// <summary>Shutting down or logging off mid-game: put the power mode back now (exit code may not run).</summary>
     private void OnSessionEnding(object? sender, Microsoft.Win32.SessionEndingEventArgs e)
     {
+        _health.Flush();
         if (_powerModeBeforeGame is Guid previous)
         {
             PowerMode.Set(previous);
@@ -687,7 +692,8 @@ internal sealed class BuddyContext : ApplicationContext
     {
         if (!_settings.LateNightNudge) return false;
         int hour = DateTime.Now.Hour, from = Math.Clamp(_settings.LateNightHour, 0, 23);
-        return from >= 5 ? hour >= from || hour < 5 : hour >= from && hour < 5;
+        if (from is >= 5 and < 12) from += 12; // "9" means 9 pm, not 9 in the morning
+        return from >= 12 ? hour >= from || hour < 5 : hour >= from && hour < 5;
     }
 
     private void SyncAudioHotkey()
@@ -1187,9 +1193,9 @@ internal sealed class BuddyContext : ApplicationContext
             _settings.PowerModeToRestore = null;
             _settings.Save();
         }
+        _health.Flush(); // lock-protected, safe even if the loop is still busy
         if (loopStopped)
         {
-            _health.Flush();
             _temps.Dispose(); // never close the sensor driver while a read is still running
             _idleHogs.Dispose();
             _gpuChoice.Dispose();

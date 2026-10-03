@@ -49,28 +49,40 @@ public static class ClipStorage
     {
         long total = 0;
         int count = 0;
+        // Files: skip OneDrive "online-only" ones (no disk space used here). Files kept on the device are reparse
+        // points too, so those are counted. Folders: don't follow links/junctions (could loop or double count).
         var options = new EnumerationOptions
         {
-            RecurseSubdirectories = recursive,
             IgnoreInaccessible = true,
-            // Skip links, and OneDrive "online-only" files (they don't use disk space here).
-            AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.Offline | RecallOnOpen | RecallOnDataAccess,
+            AttributesToSkip = FileAttributes.Offline | RecallOnOpen | RecallOnDataAccess,
         };
-        try
+        var pending = new Stack<DirectoryInfo>();
+        pending.Push(new DirectoryInfo(path));
+        while (pending.Count > 0)
         {
-            foreach (FileInfo f in new DirectoryInfo(path).EnumerateFiles("*", options))
+            DirectoryInfo dir = pending.Pop();
+            try
             {
-                total += f.Length;
-                if (++count % 500 == 0) cancel.ThrowIfCancellationRequested();
+                foreach (FileInfo f in dir.EnumerateFiles("*", options))
+                {
+                    total += f.Length;
+                    if (++count % 500 == 0) cancel.ThrowIfCancellationRequested();
+                }
+                if (!recursive) continue;
+                foreach (DirectoryInfo sub in dir.EnumerateDirectories("*", options))
+                {
+                    if (sub.LinkTarget == null) pending.Push(sub); // symlinks/junctions have a target; OneDrive folders don't
+                }
             }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            // folder vanished or locked mid-walk; partial size is fine
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // folder vanished or locked mid-walk; partial size is fine
+            }
+            cancel.ThrowIfCancellationRequested();
         }
         return total;
     }
