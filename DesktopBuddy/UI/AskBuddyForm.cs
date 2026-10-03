@@ -129,14 +129,38 @@ internal sealed class AskBuddyForm : Form
         var turns = new List<(bool, string)>(_history) { (true, Prompts.WithStats(_s, question)) };
         try
         {
-            string answer = await _s.Ai.Ask(Prompts.System, turns, _closing.Token);
-            if (IsDisposed) return;
-            _history.Add((true, question));
-            _history.Add((false, answer));
-            while (_history.Count > MaxTurnsKept) _history.RemoveRange(0, 2);
+            string answer;
+            var done = new List<string>();
+            if (_s.Settings.AiActions)
+            {
+                var actions = new BuddyActions(_s, _s.PauseAlerts);
+                AiClient.Reply reply = await _s.Ai.AskWithTools(Prompts.System + BuddyActions.PromptAddition, turns, actions.Definitions, _closing.Token);
+                if (IsDisposed) return;
+                answer = reply.Text;
+                if (answer.Length > 0)
+                {
+                    Ui.AppendHeading(_transcript, "Buddy", Ui.Green);
+                    Ui.AppendBody(_transcript, answer);
+                }
+                // Each proposed action: checked and confirmed by Desktop Buddy itself, at most 3 per reply.
+                foreach (var (name, input) in reply.ToolCalls.Take(3))
+                {
+                    string result = actions.Run(this, name, input);
+                    done.Add(result);
+                    if (!IsDisposed) Ui.AppendBody(_transcript, result, result.StartsWith('✔') ? Ui.Green : Ui.Grey);
+                }
+            }
+            else
+            {
+                answer = await _s.Ai.Ask(Prompts.System, turns, _closing.Token);
+                if (IsDisposed) return;
+                Ui.AppendHeading(_transcript, "Buddy", Ui.Green);
+                Ui.AppendBody(_transcript, answer);
+            }
 
-            Ui.AppendHeading(_transcript, "Buddy", Ui.Green);
-            Ui.AppendBody(_transcript, answer);
+            _history.Add((true, question));
+            _history.Add((false, done.Count > 0 ? $"{answer}\n[Actions: {string.Join(" ", done)}]".Trim() : answer));
+            while (_history.Count > MaxTurnsKept) _history.RemoveRange(0, 2);
         }
         catch (AiUnavailableException ex)
         {

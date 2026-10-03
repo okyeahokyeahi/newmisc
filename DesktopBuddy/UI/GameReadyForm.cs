@@ -11,35 +11,13 @@ namespace DesktopBuddy.UI;
 /// </summary>
 internal sealed class GameReadyForm : Form
 {
-    private static readonly string[] NeverClose =
+    internal static readonly string[] NeverClose =
         ["discord", "discordptb", "discordcanary", "robloxplayerbeta", "robloxplayerlauncher", "robloxstudiolauncherbeta",
          "robloxcrashhandler", "windows10universal", "desktopbuddy", "explorer", "steam", "steamwebhelper",
          "epicgameslauncher", "riotclientservices", "riotclientux", "battle.net", "eadesktop", "xboxpcapp",
          "nvidia app", "nvidia overlay", "nvcontainer", "nitrosense", "predatorsense", "acerquickpanel", "quickaccess",
          "obs64", "textinputhost", "searchhost", "shellexperiencehost", "startmenuexperiencehost", "applicationframehost",
          "systemsettings", "lockapp", "taskmgr"];
-
-    private const uint WM_CLOSE = 0x0010;
-
-    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hwnd);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
-
-    [DllImport("user32.dll")]
-    private static extern int GetWindowTextLength(IntPtr hwnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     private readonly BuddyServices _s;
     private readonly ListView _list;
@@ -155,7 +133,7 @@ internal sealed class GameReadyForm : Form
         // so this repeats a few times while they close one after another.
         for (int i = 0; i < 16 && names.Any(StillRunning); i++)
         {
-            if (i % 4 == 0) CloseAllWindows(names);
+            if (i % 4 == 0) AppCloser.CloseAllWindows(names);
             await Task.Delay(500);
         }
         if (IsDisposed) return;
@@ -166,31 +144,6 @@ internal sealed class GameReadyForm : Form
                        (stubborn.Count > 0 ? $" Still running (probably in the tray): {string.Join(", ", stubborn)}." : " Have fun!");
         _closeButton.Enabled = true;
         Fill();
-    }
-
-    /// <summary>Posts WM_CLOSE to every visible top-level window owned by these apps.</summary>
-    private static void CloseAllWindows(IEnumerable<string> names)
-    {
-        var pids = new HashSet<uint>();
-        foreach (string name in names)
-        {
-            foreach (Process p in Process.GetProcessesByName(name))
-            {
-                pids.Add((uint)p.Id);
-                p.Dispose();
-            }
-        }
-
-        EnumWindows((hwnd, _) =>
-        {
-            const uint GW_OWNER = 4;
-            if (IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == IntPtr.Zero && GetWindowTextLength(hwnd) > 0 &&
-                GetWindowThreadProcessId(hwnd, out uint pid) != 0 && pids.Contains(pid))
-            {
-                PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-            }
-            return true;
-        }, IntPtr.Zero);
     }
 
     private static bool StillRunning(string name)

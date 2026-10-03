@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Anthropic;
 using Anthropic.Exceptions;
 using Anthropic.Models.Beta.Messages;
@@ -53,17 +54,27 @@ internal sealed class AiClient(Settings settings)
         }
     }
 
+    /// <summary>A reply: the text, plus any actions the AI proposed (none run until the user says yes).</summary>
+    public sealed record Reply(string Text, IReadOnlyList<(string Name, IReadOnlyDictionary<string, JsonElement> Input)> ToolCalls);
+
     /// <summary>Sends a conversation (alternating user/assistant, starting with user) and returns the reply text.</summary>
-    public Task<string> Ask(string system, IReadOnlyList<(bool FromUser, string Text)> turns, CancellationToken cancel = default) =>
-        Send(system, turns.Select(t => new BetaMessageParam
+    public async Task<string> Ask(string system, IReadOnlyList<(bool FromUser, string Text)> turns, CancellationToken cancel = default) =>
+        (await Send(system, ToMessages(turns), null, cancel)).Text;
+
+    /// <summary>Like Ask, but the AI may also propose actions from the given tool list.</summary>
+    public Task<Reply> AskWithTools(string system, IReadOnlyList<(bool FromUser, string Text)> turns, IReadOnlyList<BetaTool> tools,
+        CancellationToken cancel = default) => Send(system, ToMessages(turns), tools, cancel);
+
+    private static List<BetaMessageParam> ToMessages(IReadOnlyList<(bool FromUser, string Text)> turns) =>
+        turns.Select(t => new BetaMessageParam
         {
             Role = t.FromUser ? Role.User : Role.Assistant,
             Content = t.Text,
-        }).ToList(), cancel);
+        }).ToList();
 
     /// <summary>Asks about a picture (a screenshot region the user picked and previewed).</summary>
-    public Task<string> AskWithImage(string system, byte[] image, bool isPng, string question, CancellationToken cancel = default) =>
-        Send(system,
+    public async Task<string> AskWithImage(string system, byte[] image, bool isPng, string question, CancellationToken cancel = default) =>
+        (await Send(system,
         [
             new BetaMessageParam
             {
@@ -74,9 +85,9 @@ internal sealed class AiClient(Settings settings)
                     new BetaTextBlockParam { Text = question },
                 },
             },
-        ], cancel);
+        ], null, cancel)).Text;
 
-    private async Task<string> Send(string system, List<BetaMessageParam> messages, CancellationToken cancel)
+    private async Task<Reply> Send(string system, List<BetaMessageParam> messages, IReadOnlyList<BetaTool>? tools, CancellationToken cancel)
     {
         string key = CredentialStore.GetApiKey()
             ?? throw new AiUnavailableException("No API key yet. Tray menu > Set API key… to turn on AI answers.");
@@ -95,7 +106,7 @@ internal sealed class AiClient(Settings settings)
         }
         try
         {
-            return await AskCore(key, system, messages, cancel);
+            return await AskCore(key, system, messages, tools, cancel);
         }
         finally
         {
@@ -105,7 +116,7 @@ internal sealed class AiClient(Settings settings)
 
     private static int _inFlight;
 
-    private async Task<string> AskCore(string key, string system, List<BetaMessageParam> messages, CancellationToken cancel)
+    private async Task<Reply> AskCore(string key, string system, List<BetaMessageParam> messages, IReadOnlyList<BetaTool>? tools, CancellationToken cancel)
     {
         var client = new AnthropicClient { ApiKey = key, Timeout = TimeSpan.FromSeconds(90), MaxRetries = 1 };
         var request = new MessageCreateParams
@@ -117,6 +128,8 @@ internal sealed class AiClient(Settings settings)
         };
         if (!settings.AiModel.StartsWith("claude-haiku", StringComparison.OrdinalIgnoreCase))
             request = request with { OutputConfig = new BetaOutputConfig { Effort = Effort.Low } }; // short chatty answers
+        if (tools is { Count: > 0 })
+            request = request with { Tools = tools.Select(t => (BetaToolUnion)t).ToList() };
         if (FallbackModels.Contains(settings.AiModel))
             request = request with { Betas = ["server-side-fallback-2026-07-01"], Fallbacks = new Default() };
 
@@ -152,13 +165,19 @@ internal sealed class AiClient(Settings settings)
         Record(response.Usage.InputTokens, response.Usage.OutputTokens);
 
         if (response.StopReason == "refusal")
-            return "I can't help with that one. Try asking it a different way.";
+            return new Reply("I can't help with that one. Try asking it a different way.", []);
 
+        var calls = new List<(string, IReadOnlyDictionary<string, JsonElement>)>();
+        foreach (var block in response.Content)
+        {
+            if (block.TryPickToolUse(out BetaToolUseBlock? use)) calls.Add((use.Name, use.Input));
+        }
         string text = string.Join("\n", response.Content
             .Select(b => b.TryPickText(out BetaTextBlock? t) ? t.Text : null)
             .Where(t => !string.IsNullOrWhiteSpace(t))).Trim();
-        if (text.Length == 0) return "(No answer came back. Try again.)";
-        return response.StopReason == "max_tokens" ? text + "\n\n(Answer was cut short. Ask me to continue.)" : text;
+        if (text.Length == 0 && calls.Count == 0) return new Reply("(No answer came back. Try again.)", []);
+        if (response.StopReason == "max_tokens") text += "\n\n(Answer was cut short. Ask me to continue.)";
+        return new Reply(text, calls);
     }
 
     private void Record(long inputTokens, long outputTokens)

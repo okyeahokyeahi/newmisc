@@ -113,6 +113,8 @@ internal sealed class BuddyContext : ApplicationContext
             Reminders = _reminders,
             ShowScreenAsk = () => ScreenAsk.Start(_services!),
             ShowSettings = ShowSettings,
+            ShowWeeklyReport = () => { }, // filled in by the weekly report feature
+            PauseAlerts = minutes => { _pausedUntil = DateTime.Now.AddMinutes(minutes); UiTick(); },
         };
 
         // Monitors run on a background thread; every alert hops to the UI thread here.
