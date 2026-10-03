@@ -25,6 +25,7 @@ internal sealed class BuddyContext : ApplicationContext
     private readonly RestartMonitor _restart;
     private readonly ReminderStore _reminders = new();
     private readonly LaptopCareMonitor _care = new();
+    private readonly StudioCrashWatcher _studio;
     private readonly SoundBank _sounds;
     private bool MagiTheme => _settings.Theme.Equals("magi", StringComparison.OrdinalIgnoreCase);
     private Hotkey? _hotkey;
@@ -78,6 +79,18 @@ internal sealed class BuddyContext : ApplicationContext
         _gpuChoice = new GpuChoiceWatcher(settings, _resources);
         _restart = new RestartMonitor(_games);
         _sounds = new SoundBank(settings, () => _games.InSession);
+        _studio = new StudioCrashWatcher(settings);
+        _studio.Crashed += crash => OnUi(() => Notify("Roblox Studio closed unexpectedly",
+            crash.RecoveryFile != null
+                ? $"Your latest recovery copy is {Path.GetFileName(crash.RecoveryFile)} ({File.GetLastWriteTime(crash.RecoveryFile):HH:mm}). " +
+                  "Click to show it. I also kept a backup copy."
+                : "No recovery file found. If the place was published, reopen it from Studio's start page (My Games).",
+            ToolTipIcon.Warning, critical: true,
+            onClick: () =>
+            {
+                if (crash.RecoveryFile != null) Process.Start("explorer.exe", $"/select,\"{crash.RecoveryFile}\"");
+                else OpenFile("explorer.exe", StudioCrashWatcher.BackupRoot);
+            }));
 
         _services = new BuddyServices
         {
@@ -244,6 +257,7 @@ internal sealed class BuddyContext : ApplicationContext
             Safe("temperature monitor", _temps.Tick);
             Safe("heat slowdown monitor", _heat.Tick);
             Safe("game tracker", _games.Tick);
+            Safe("Studio crash watcher", () => _studio.Tick((_resources.Latest?.AllApps ?? []).Select(a => a.Name)));
             Safe("idle hog watcher", () => _idleHogs.Tick(_games.InSession));
             if (_settings.WatchGraphicsChip) Safe("graphics chip watcher", _gpuChoice.Tick);
 

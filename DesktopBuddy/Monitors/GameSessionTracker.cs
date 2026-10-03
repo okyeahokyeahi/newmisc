@@ -13,7 +13,8 @@ public sealed record GameSessionReport(
     TimeSpan CpuHeatSlowdown,
     TimeSpan GpuHeatSlowdown,
     IReadOnlyList<string> HeldAlerts,
-    NetworkSummary? Network);
+    NetworkSummary? Network,
+    RobloxExit? Roblox = null);
 
 /// <summary>
 /// Game mode: while a game runs, popups and alerts wait. Afterwards you get a short report: how long
@@ -113,7 +114,9 @@ public sealed class GameSessionTracker(Settings settings, ResourceMonitor resour
             Clamp((heatNow?.CpuToday ?? TimeSpan.Zero) - _cpuSlowAtStart),
             Clamp((heatNow?.GpuToday ?? TimeSpan.Zero) - _gpuSlowAtStart),
             held,
-            network);
+            network,
+            settings.RobloxKickExplainer && _game.StartsWith("Roblox", StringComparison.OrdinalIgnoreCase)
+                ? RobloxLogReader.LastExit(_start.Value.ToLocalTime()) : null);
         Log.Info($"Game session ended: {_game}, {length:h\\:mm\\:ss}");
         GameStopped?.Invoke();
 

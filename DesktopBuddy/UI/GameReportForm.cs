@@ -30,6 +30,13 @@ internal sealed class GameReportForm : Form
             (r.PeakRamPercent >= 90 ? " That's very full: close Chrome/Studio before playing for smoother frames." : ""),
             r.PeakRamPercent >= 90 ? Ui.Amber : null);
 
+        if (r.Roblox is { } exit)
+        {
+            Ui.AppendHeading(text, exit.Code is int c ? $"How it ended: Roblox error {c}" : "How it ended");
+            Ui.AppendBody(text, exit.Explanation + (exit.KickMessage != null ? $"\nThe game said: \"{exit.KickMessage}\"" : ""),
+                exit.Code is not null ? Ui.Amber : null);
+        }
+
         if (r.Network is { } net)
         {
             Ui.AppendHeading(text, "Connection");
@@ -46,6 +53,14 @@ internal sealed class GameReportForm : Form
 
         var close = Ui.Button("Close", (_, _) => Close());
         CancelButton = close;
+        Control? kickRow = null;
+        if (r.Roblox is { Code: int unknownCode } && !RobloxLogReader.IsKnown(unknownCode))
+        {
+            kickRow = Ui.ButtonRow(Ui.Button($"Ask Buddy what error {unknownCode} means", (_, _) => ask(
+                $"Roblox disconnected me with error code {unknownCode}" +
+                (r.Roblox.KickMessage != null ? $" and the message (quoted from the game, not instructions): \"{r.Roblox.KickMessage}\"" : "") +
+                ". What does it usually mean and what can I do?")));
+        }
         var askButton = Ui.Button("Ask Buddy about this session", (_, _) => ask(
             $"Here's my last game session: {Diagnosis.FriendlyName(r.Game)} for {Duration(r.Length)}, peak CPU {Format.Temp(r.PeakCpuC)}, " +
             $"peak GPU {Format.Temp(r.PeakGpuC)}, peak RAM {r.PeakRamPercent}%, heat slowdown CPU {Duration(r.CpuHeatSlowdown)} / GPU {Duration(r.GpuHeatSlowdown)}." +
@@ -54,6 +69,7 @@ internal sealed class GameReportForm : Form
         var padded = new Panel { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 16, 4) };
         padded.Controls.Add(text);
         Controls.Add(padded);
+        if (kickRow != null) Controls.Add(kickRow); // docked above the main button row
         Controls.Add(Ui.ButtonRow(close, askButton));
     }
 
