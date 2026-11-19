@@ -1,9 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Reflection;
-using System.Security.AccessControl;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text.Json;
 
 namespace DesktopBuddy;
@@ -63,7 +61,7 @@ internal static class Updater
     {
         // Everything the elevated swap script later runs or copies lives in a folder only admins can write to.
         // The user's %TEMP% would let any program swap the script or the files during the wait, and get admin.
-        string work = CreateAdminOnlyFolder();
+        string work = AdminOnlyFolder.Create("DesktopBuddyUpdate-");
         try
         {
             string staging = Path.Combine(work, "files");
@@ -125,37 +123,9 @@ internal static class Updater
         }
         catch
         {
-            try { Directory.Delete(work, recursive: true); } catch (Exception ex) { Log.Error($"Couldn't remove {work}", ex); }
+            AdminOnlyFolder.TryDelete(work);
             throw;
         }
-    }
-
-    /// <summary>
-    /// Creates a new, randomly named folder under %SystemRoot%\Temp that only Administrators and SYSTEM can open.
-    /// Standard users can create folders there but can't list it, so they can't guess or pre-create this one.
-    /// </summary>
-    private static string CreateAdminOnlyFolder()
-    {
-        string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Temp");
-        string work = Path.Combine(root, "DesktopBuddyUpdate-" + Guid.NewGuid().ToString("N"));
-        if (Directory.Exists(work)) throw new InvalidOperationException("Couldn't create a safe folder for the update. Try again.");
-
-        var admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
-        var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-        var security = new DirectorySecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false); // nothing inherited from Temp
-        security.SetOwner(admins);
-        foreach (SecurityIdentifier sid in new[] { admins, system })
-            security.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
-                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-
-        var dir = new DirectoryInfo(work);
-        dir.Create(security); // the ACL is applied as the folder is created, not afterwards
-        dir.Refresh();
-        if (dir.Attributes.HasFlag(FileAttributes.ReparsePoint) || dir.EnumerateFileSystemInfos().Any()
-            || dir.GetAccessControl().GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner || owner != admins)
-            throw new InvalidOperationException("Couldn't create a safe folder for the update. Try again.");
-        return work;
     }
 
     private static Version Normalize(Version v) => new(v.Major, v.Minor, Math.Max(0, v.Build), Math.Max(0, v.Revision));
