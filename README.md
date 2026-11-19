@@ -108,6 +108,9 @@ Desktop Buddy starts with Windows automatically from then on (untick *Start with
 Desktop Buddy updates itself. A minute after it starts (and every 6 hours after that) it checks the Releases page. When a
 newer version exists you get an "Update available" notification: click it and the app downloads the new version, checks
 its SHA-256 checksum, swaps the files and restarts itself. Settings, the allow list, logs and your API key are kept.
+Because the swap runs as admin, the download is staged in a new folder under `C:\Windows\Temp` that only
+Administrators and SYSTEM can open, and that folder is deleted afterwards. The swap's log goes to
+`%AppData%\DesktopBuddy\update-log.txt`.
 You can also check by hand: tray menu → *Check for updates*. Turn it off with `CheckForUpdates: false`.
 
 ## Settings
