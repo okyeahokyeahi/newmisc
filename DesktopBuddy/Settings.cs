@@ -97,6 +97,11 @@ public sealed class Settings
     /// <summary>0..1.5; your own files are levelled first, then scaled by this.</summary>
     public double MagiVolume { get; set; } = 0.8;
     public bool MagiAiVoices { get; set; } = true;
+    /// <summary>
+    /// "classic" (today's windows) or "new" (the MAGI console, in development). Nothing reads this yet;
+    /// the new UI will check it so it can ship switched off until it does everything the classic windows do.
+    /// </summary>
+    public string UiMode { get; set; } = "classic";
 
     // --- Extras ---
     /// <summary>After Roblox Studio closes unexpectedly, point to the recovery copy and keep extra backups.</summary>
