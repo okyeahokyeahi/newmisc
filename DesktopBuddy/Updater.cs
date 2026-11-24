@@ -11,7 +11,9 @@ public sealed record UpdateInfo(Version Version, string DownloadUrl, string? Sha
 /// <summary>
 /// Self-update from this repo's public GitHub Releases: check for a newer version, download the zip,
 /// verify its SHA-256 (GitHub publishes one per file), then a tiny script swaps the files once
-/// Desktop Buddy has exited and starts the new version. Settings live in %AppData%, so they survive.
+/// Desktop Buddy has exited and starts the new version. The download, the files and the script are staged in
+/// an admin-only folder under %SystemRoot%\Temp, because the script runs as admin. Settings live in %AppData%,
+/// so they survive.
 /// </summary>
 internal static class Updater
 {
@@ -57,59 +59,73 @@ internal static class Updater
     /// </summary>
     public static async Task<bool> PrepareAndLaunchAsync(UpdateInfo update)
     {
-        string work = Path.Combine(Path.GetTempPath(), "DesktopBuddyUpdate");
-        if (Directory.Exists(work)) Directory.Delete(work, recursive: true);
-        string staging = Path.Combine(work, "files");
-        Directory.CreateDirectory(staging);
-        string zipPath = Path.Combine(work, AssetName);
-
-        using (var response = await Http.GetAsync(update.DownloadUrl, HttpCompletionOption.ResponseHeadersRead))
+        // Everything the elevated swap script later runs or copies lives in a folder only admins can write to.
+        // The user's %TEMP% would let any program swap the script or the files during the wait, and get admin.
+        string work = AdminOnlyFolder.Create("DesktopBuddyUpdate-");
+        try
         {
-            response.EnsureSuccessStatusCode();
-            await using var file = File.Create(zipPath);
-            await response.Content.CopyToAsync(file);
+            string staging = Path.Combine(work, "files");
+            Directory.CreateDirectory(staging);
+            string zipPath = Path.Combine(work, AssetName);
+
+            using (var response = await Http.GetAsync(update.DownloadUrl, HttpCompletionOption.ResponseHeadersRead))
+            {
+                response.EnsureSuccessStatusCode();
+                await using var file = File.Create(zipPath);
+                await response.Content.CopyToAsync(file);
+            }
+
+            if (update.Sha256 != null)
+            {
+                await using var stream = File.OpenRead(zipPath);
+                string actual = Convert.ToHexString(await SHA256.HashDataAsync(stream));
+                if (!actual.Equals(update.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The downloaded update was corrupted (checksum mismatch). Try again later.");
+            }
+
+            ZipFile.ExtractToDirectory(zipPath, staging);
+            if (!File.Exists(Path.Combine(staging, "DesktopBuddy.exe")))
+                throw new InvalidOperationException("The update package didn't contain DesktopBuddy.exe.");
+
+            string installDir = AppContext.BaseDirectory.TrimEnd('\\');
+            string exe = Path.Combine(installDir, "DesktopBuddy.exe");
+            string sys = Environment.SystemDirectory; // full paths, so nothing is picked up from the current folder or PATH
+            int pid = Environment.ProcessId;
+            string script = Path.Combine(work, "apply-update.cmd");
+            string scriptLog = Path.Combine(Settings.Folder, "update-log.txt");
+            File.WriteAllText(script,
+                "@echo off\r\n" +
+                $"echo %date% %time% waiting for Desktop Buddy (pid {pid}) to close> \"{scriptLog}\"\r\n" +
+                "set /a tries=0\r\n" +
+                ":wait\r\n" +
+                "set /a tries+=1\r\n" +
+                // give up waiting after ~60 s rather than hanging forever
+                $"\"{sys}\\tasklist.exe\" /FI \"PID eq {pid}\" | \"{sys}\\find.exe\" \"{pid}\" >nul && if %tries% lss 60 (\"{sys}\\timeout.exe\" /t 1 /nobreak >nul & goto wait)\r\n" +
+                $"echo %date% %time% copying files>> \"{scriptLog}\"\r\n" +
+                $"\"{sys}\\robocopy.exe\" \"{staging}\" \"{installDir}\" /E /R:10 /W:1 /NFL /NDL /NJH /NJS >> \"{scriptLog}\"\r\n" +
+                $"echo %date% %time% robocopy exit code %errorlevel% (0-7 = OK)>> \"{scriptLog}\"\r\n" +
+                // The new app inherits this folder as its working folder (same as the logon task gives it).
+                $"cd /d \"{installDir}\"\r\n" +
+                $"start \"\" \"{exe}\"\r\n" +
+                $"echo %date% %time% started the new version>> \"{scriptLog}\"\r\n" +
+                // Last line: remove the staging folder, this script included (cmd reopens it per line, so that works).
+                $"rd /s /q \"{work}\"\r\n");
+
+            Log.Info($"Applying update {CurrentVersion} -> {update.Version} into {installDir} (staged in {work})");
+            // Started from this (already elevated) app, so the relaunch needs no admin prompt.
+            Process.Start(new ProcessStartInfo(Path.Combine(sys, "cmd.exe"), $"/c \"{script}\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                WorkingDirectory = sys, // not the staging folder, so the script can delete it at the end
+            });
+            return true;
         }
-
-        if (update.Sha256 != null)
+        catch
         {
-            await using var stream = File.OpenRead(zipPath);
-            string actual = Convert.ToHexString(await SHA256.HashDataAsync(stream));
-            if (!actual.Equals(update.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The downloaded update was corrupted (checksum mismatch). Try again later.");
+            AdminOnlyFolder.TryDelete(work);
+            throw;
         }
-
-        ZipFile.ExtractToDirectory(zipPath, staging);
-        if (!File.Exists(Path.Combine(staging, "DesktopBuddy.exe")))
-            throw new InvalidOperationException("The update package didn't contain DesktopBuddy.exe.");
-
-        string installDir = AppContext.BaseDirectory.TrimEnd('\\');
-        string exe = Path.Combine(installDir, "DesktopBuddy.exe");
-        int pid = Environment.ProcessId;
-        string script = Path.Combine(work, "apply-update.cmd");
-        string scriptLog = Path.Combine(Settings.Folder, "update-log.txt");
-        File.WriteAllText(script,
-            "@echo off\r\n" +
-            $"echo %date% %time% waiting for Desktop Buddy (pid {pid}) to close> \"{scriptLog}\"\r\n" +
-            "set /a tries=0\r\n" +
-            ":wait\r\n" +
-            "set /a tries+=1\r\n" +
-            // give up waiting after ~60 s rather than hanging forever
-            $"tasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && if %tries% lss 60 (timeout /t 1 /nobreak >nul & goto wait)\r\n" +
-            $"echo %date% %time% copying files>> \"{scriptLog}\"\r\n" +
-            $"robocopy \"{staging}\" \"{installDir}\" /E /R:10 /W:1 /NFL /NDL /NJH /NJS >> \"{scriptLog}\"\r\n" +
-            $"echo %date% %time% robocopy exit code %errorlevel% (0-7 = OK)>> \"{scriptLog}\"\r\n" +
-            $"start \"\" \"{exe}\"\r\n" +
-            $"echo %date% %time% started the new version>> \"{scriptLog}\"\r\n");
-
-        Log.Info($"Applying update {CurrentVersion} -> {update.Version} into {installDir}");
-        // Started from this (already elevated) app, so the relaunch needs no admin prompt.
-        Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{script}\"")
-        {
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            WorkingDirectory = work,
-        });
-        return true;
     }
 
     private static Version Normalize(Version v) => new(v.Major, v.Minor, Math.Max(0, v.Build), Math.Max(0, v.Revision));

@@ -61,9 +61,13 @@ internal static class Autostart
             </Task>
             """;
 
-        string file = Path.Combine(Path.GetTempPath(), "DesktopBuddy-task.xml");
+        // schtasks (elevated) reads this file to create a task that runs as admin at every logon, so it must sit
+        // where only admins can write; in the user's %TEMP% any program could swap in its own task first.
+        string? folder = null;
         try
         {
+            folder = AdminOnlyFolder.Create("DesktopBuddyTask-");
+            string file = Path.Combine(folder, "DesktopBuddy-task.xml");
             File.WriteAllText(file, xml, Encoding.Unicode); // matches the UTF-16 declaration
             var (code, output) = RunSchtasks($"/Create /TN \"{TaskName}\" /XML \"{file}\" /F");
             if (code != 0) Log.Error($"Creating the startup task failed: {output.Trim()}");
@@ -75,9 +79,14 @@ internal static class Autostart
             }
             return code == 0;
         }
+        catch (Exception ex)
+        {
+            Log.Error("Creating the startup task failed", ex);
+            return false;
+        }
         finally
         {
-            try { File.Delete(file); } catch { /* temp file */ }
+            if (folder != null) AdminOnlyFolder.TryDelete(folder);
         }
     }
 
@@ -105,7 +114,8 @@ internal static class Autostart
 
     private static (int Code, string Output) RunSchtasks(string args)
     {
-        var start = new ProcessStartInfo("schtasks.exe", args)
+        // Full path, so a schtasks.exe in the current folder or on PATH is never picked up by this admin process.
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "schtasks.exe"), args)
         {
             CreateNoWindow = true,
             UseShellExecute = false,
